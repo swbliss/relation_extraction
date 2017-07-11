@@ -61,7 +61,7 @@ def get_pf(sentLen, allIndice, filter_h=5, max_l=100):
     return [x1, x2]
 
 # ouput: list of InstnaceBag
-# InstanceBag: bag of instances in the form (entities, rels, num,...) related with one relation
+# InstanceBag: bag of instances in the form (entities, rels, num,...) related with one entity pair
 def make_idx_data_cv(data, filter_h, max_l):
     newData = []
     for ins in data:

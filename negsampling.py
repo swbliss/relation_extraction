@@ -125,14 +125,16 @@ class UnigramTable:
         self.word_dict = {}
         word_idx = 1
         while True:
-            word = f.readline().strip()
+            word = f.readline().strip().lower()
             if not word: break
             self.word_dict[word] = word_idx
             word_idx += 1
         f.close()
 
     def sample(self, count, for_test):
+        # get word index in word dictionary from word name
         def get_word_idx(word):
+            word = word.lower()
             if word in self.word_dict.keys():
                 if for_test and self.word_dict[word] > 5000:
                     return -1
@@ -147,6 +149,7 @@ class UnigramTable:
         indices = np.random.randint(low=0, high=len(self.table), size=count)
         return [get_word_idx(self.get_word_by_index(self.table[i])) for i in indices]
 
+    # get word name from index in table
     def get_word_by_index(self, idx):
         """
         :param idx: index of the word.

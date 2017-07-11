@@ -7,7 +7,7 @@ e_*
 /gap_40_len_80
 /neg_sampling_data
 .*.swp
-/data_nyt
-/data_sem_eval
-/results_graph
 /result_old_code
+/result_graph
+/data_*
+/scripts

@@ -237,8 +237,8 @@ def pre_train_conv_net(train,
     # grad_updates = sgd_updates_adadelta(norm, params, cost, lr_decay, 1e-6, sqr_norm_lim)
     print "--------[5]--------"
 
-    #train data split
-    #shuffle train dataset and assign to mini batches.
+    # train data split
+    # shuffle train dataset and assign to mini batches.
     np.random.seed(rnd)
     #if dataset size is not a multiple of mini batches, replicate
     if len(train) % batch_size > 0:
@@ -261,23 +261,6 @@ def pre_train_conv_net(train,
     # TODO: change this part to apply curriculum learning
     if curriculum == "none":
         new_train = np.random.permutation(new_train)
-    # elif curriculum == "instance_num":
-    #     new_train = np.array(sorted(new_train, key=lambda bag: bag.num, reverse=True))
-    # elif curriculum == "sentence_len":
-    #     sent_train = []
-    #     for bag in new_train:
-    #         sentences = bag.sentences
-    #         positions = bag.positions
-    #         # TODO: check entitiesPos is changed as sentence changes. If it changes, change below(+2) sent_inst line
-    #         entities_pos = bag.entitiesPos
-    #         for idx in range(bag.num):
-    #             sent_inst = InstanceBag(bag.entities, bag.rel, 1, [sentences[idx]], positions[idx], entities_pos)
-    #             sent_train += [sent_inst]
-    #     def original_length(sent):
-    #         temp = sent[:]
-    #         temp.remove(0)
-    #         return len(temp)
-    #     new_train = np.array(sorted(sent_train, key=lambda bag: original_length(bag.sentences[0])))
 
     [train_rels, train_nums, train_sents, train_poss, train_eposs] = bags_decompose(new_train)
     # [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
@@ -294,73 +277,36 @@ def pre_train_conv_net(train,
         epochs = 1
 
     while (epoch < epochs):
-        # TODO: change this part to apply curriculum learning
+        cost_f = open(
+            inputdir + "/pre_trained_data/cost_log_epoch_" + str(epoch), "w")
+        print("\n### epoch " + str(epoch) + " ###")
         if curriculum == "none":
             for train_batch_idx in range(n_train_batches):
-                if train_batch_idx % 100 == 0 or train_batch_idx == n_train_batches - 1:
-                    print("pre_training: " + str(train_batch_idx) + " [" +
+                if train_batch_idx % 100 == 0:
+                    print(train_batch_idx)
+                if train_batch_idx % 500 == 0 or train_batch_idx == n_train_batches - 1:
+                    print("#pre_training result saving: " +
+                          str(train_batch_idx) + " [" +
                           time.asctime(time.localtime(time.time())) + "]")
-                    pickle.dump([conv_layer.W, Words, PF1W, PF2W], open(
-                        inputdir + "/pre_trained_data/weights_" + str(train_batch_idx) + ".p", "wb"))
+                    pickle.dump([conv_layer.W.get_value(), Words.get_value(),
+                                 PF1W.get_value(), PF2W.get_value()],
+                                open(inputdir + "/pre_trained_data/weights_" +
+                                     str(epoch) + "_" + str(train_batch_idx) +
+                                     ".p", "wb"))
                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
                 batch_data = pre_train_get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
                                             train_eposs, img_h)
-                train_model_batch(*batch_data)
+                cost = train_model_batch(*batch_data)
+                cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
+                             " " + str(cost) + "\n")
                 set_zero(zero_vec)
                 set_zero_pf1(zero_vec_pf)
                 set_zero_pf2(zero_vec_pf)
-        # else:
-        #     for progress in range(n_train_batches/5, n_train_batches + 1, n_train_batches/5):
-        #         prev_valid_cost = -sys.maxint
-        #         iteration = 0               # number of epochs spent for each curriculum
-        #         wait_until_increase = 0     # epochs spent for waiting increase of validation cost
-        #
-        #         while True:
-        #             print "progress: " + str(progress / (n_train_batches / 5)) + "iteration: ", str(iteration)
-        #             for train_batch_idx in range(progress):
-        #                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
-        #                 batch_data = pre_train_get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
-        #                                             train_eposs, img_h, U.shape[0])
-        #                 train_model_batch(*batch_data)
-        #                 set_zero(zero_vec)
-        #                 set_zero_pf1(zero_vec_pf)
-        #                 set_zero_pf2(zero_vec_pf)
-        #
-        #             valid_cost = 0
-        #             for valid_batch_idx in range(n_valid_batches):
-        #                 inst_indices = range(valid_batch_idx * batch_size, (valid_batch_idx + 1) * batch_size)
-        #                 batch_data = pre_train_get_batch_data(inst_indices, valid_rels, valid_nums, valid_sents, valid_poss,
-        #                                             valid_eposs, img_h, U.shape[0])
-        #                 valid_cost += valid_model_batch(*batch_data)
-        #             valid_cost /= n_valid_batches
-        #
-        #             iteration += 1
-        #             if iteration >= 15:                      # 15 is the limit of epochs for each curriculum
-        #                 break
-        #
-        #             if valid_cost <= prev_valid_cost:
-        #                 wait_until_increase += 1
-        #                 if wait_until_increase >= 5:        # 5 is the limit of waiting time for increase of val cost
-        #                     break
-        #             else:
-        #                 prev_valid_cost = valid_cost
-        #                 wait_until_increase = 0
-
-
-        # test_predict = predict_relation(test_rels, test_nums, test_sents, test_poss, test_eposs, test_one, img_h)
-        # test_pr = positive_evaluation(test_predict)
-        # now = time.strftime("%Y-%m-%d %H:%M:%S")
-        # print str(now) + '\t epoch ' + str(epoch) + ' test set PR = [' + str(test_pr[0][-1]) + ' ' + str(test_pr[1][-1]) + ']'
-        #
-        # p = test_pr[0][-1]
-        # r = test_pr[1][-1]
-        # if p > 0.25 and r > 0.25:
-        #     save_pr(directory+'test_pr_' + str(epoch) + '.txt', test_pr)
-        #     now = time.strftime("%Y-%m-%d %H:%M:%S")
-        #     print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
-        # print '\n'
         epoch += 1
-    return [conv_layer.W, Words.get_value(), PF1W.get_value(), PF2W.get_value()]
+        cost_f.close()
+
+    return [conv_layer.W.get_value(), Words.get_value(),
+            PF1W.get_value(), PF2W.get_value()]
 
 
 def train_conv_net(train,
@@ -463,8 +409,8 @@ def train_conv_net(train,
     #cost = classifier.negative_log_likelihood(y)
     p_y_given_x = classifier.p_y_given_x
     dropout_cost = classifier.dropout_negative_log_likelihood(y)
-    grad_updates = adagrad(dropout_cost, params)
-    # grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
+    # grad_updates = adagrad(dropout_cost, params)
+    grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
 
     #train data split
     #shuffle train dataset and assign to mini batches.
@@ -534,6 +480,7 @@ def train_conv_net(train,
     if curriculum != "none":
         epochs = 1
 
+    # use gradually more dataset for fast learning experiment
     used_train_batches = []
     full_train_batches = n_train_batches
     train_batches = 1
@@ -616,7 +563,7 @@ def train_conv_net(train,
             p = test_pr[0][-1]
             r = test_pr[1][-1]
 
-            dir_batch = directory[:-1] + "_batches_" + str(n_train_batches) + "/"
+            dir_batch = directory + "_batches_" + str(n_train_batches) + "/"
 
             if not os.path.exists(dir_batch):
                 os.mkdir(dir_batch)
@@ -635,14 +582,32 @@ def save_pr(file, pr):
     f = open(file, 'w')
     all_pre = pr[0]
     all_rec = pr[1]
+
+    f2 = open(file[:-4] + '_wrong_case.txt', 'w')
+    wrong_label = pr[2]
+    wrong_answer = pr[3]
+    wrong_epos = pr[4]
+    wrong_sent = pr[5]
+
     for i, p in enumerate(all_pre):
         f.write(str(p) + ' ' + str(all_rec[i]) + '\n')
+
+    for i, label in enumerate(wrong_label):
+        f2.write(
+            ' '.join(list(map(lambda x: str(x), wrong_epos[i]))) + ',\t' +
+            ' '.join(list(map(lambda x: str(x), label))) + ',\t' +
+            str(wrong_answer[i]) + ',\t' +
+            ' '.join(list(map(lambda x: str(x), wrong_sent[i]))) + '\n')
+
     f.close()
+    f2.close()
 
 def positive_evaluation(predict_results):
     predict_y = predict_results[0]
     predict_y_prob = predict_results[1]
     y_given = predict_results[2]
+    epos = predict_results[3]
+    sent = predict_results[4]
 
     positive_num = 0
     #find the number of positive examples
@@ -656,9 +621,22 @@ def positive_evaluation(predict_results):
 
     all_pre = [0]
     all_rec = [0]
+
+    wrong_label = [[0]]
+    wrong_answer = [[0]]
+    wrong_epos = [[0]]
+    wrong_sent = [[0]]
     f_n = 0
     t_p = 0
     f_p = 0
+    prev_precision = 100
+
+    def append_wrong_case(labels, py, epos, sent):
+        wrong_label.append(labels)
+        wrong_answer.append(py)
+        wrong_epos.append(epos)
+        wrong_sent.append(sent)
+
     for i in range(y_given.shape[0]):
         labels = y_given[index[i],:] # key given labels
         py = predict_y[index[i]] # answer
@@ -667,10 +645,12 @@ def positive_evaluation(predict_results):
             # NA bag
             if py > 0:
                 f_p += 1
+                append_wrong_case(labels, py, epos[index[i]], sent[index[i]])
         else:
             # positive bag
             if py == 0:
                 f_n += 1
+                append_wrong_case(labels, py, epos[index[i]], sent[index[i]])
             else:
                 flag = False
                 for j in range(y_given.shape[1]):
@@ -683,6 +663,8 @@ def positive_evaluation(predict_results):
                     t_p += 1
                 else:
                     f_p += 1
+                    append_wrong_case(
+                        labels, py, epos[index[i]], sent[index[i]])
         if (t_p+f_p) == 0:
             precision = 1
         else:
@@ -691,8 +673,9 @@ def positive_evaluation(predict_results):
         if precision != all_pre[-1] or recall != all_rec[-1]:
             all_pre.append(precision)
             all_rec.append(recall)
-    return [all_pre[1:], all_rec[1:]]
-
+            prev_precision = precision
+    return [all_pre[1:], all_rec[1:],
+            wrong_label[1:], wrong_answer[1:], wrong_epos[1:], wrong_sent[1:]]
 
 
 def pre_train_select_instance(rels, nums, sents, poss, eposs, img_h):
@@ -758,11 +741,15 @@ def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
     predict_y = np.zeros((numBags), dtype='int32')
     predict_y_prob = np.zeros((numBags), dtype=theano.config.floatX)
     y = np.asarray(rels, dtype='int32')
+    significant_sents = []
+    significant_eposs = []
+
     for bagIndex, insRel in enumerate(rels):
         insNum = nums[bagIndex]
         maxP = -1
         pred_rel_type = 0
         max_pos_p = -1
+        max_index = 0
         positive_flag = False
         for m in range(insNum):
             insPos = poss[bagIndex][m]
@@ -782,16 +769,21 @@ def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
                     if tmpMax > max_pos_p:
                         max_pos_p = tmpMax
                         pred_rel_type = rel_type
+                        max_index = m
                 else:
                     if tmpMax > maxP:
                         maxP = tmpMax
+                        if not positive_flag:
+                            max_index = m
+        significant_sents.append(sents[bagIndex][max_index])
+        significant_eposs.append(eposs[bagIndex][max_index])
         if positive_flag:
             predict_y_prob[bagIndex] = max_pos_p
         else:
             predict_y_prob[bagIndex] = maxP
 
         predict_y[bagIndex] = pred_rel_type
-    return [predict_y, predict_y_prob, y]
+    return [predict_y, predict_y_prob, y, significant_eposs, significant_sents]
 
 def bags_decompose(data_bags):
     bag_sent = [data_bag.sentences for data_bag in data_bags]
@@ -829,30 +821,29 @@ if __name__ == "__main__":
     hidden_units.append(int(hu_str[-1]))
 
     # Read Wv, train, test datasets and save them in the form of python data structure with pickle.
-    # if not os.path.isfile(inputdir+'/'+str(dimension)+'/Wv.p') or for_test:
-    import dataset
-    dataset.wv2pickle(inputdir+'/wv.txt', dimension,
-                      inputdir+'/Wv.p', for_test=for_test)
+    if not os.path.isfile(inputdir+'/'+str(dimension)+'/Wv.p') or for_test:
+        import dataset
+        dataset.wv2pickle(inputdir+'/wv.txt', dimension,
+                          inputdir+'/Wv.p', for_test=for_test)
 
     resultdir = './' + 'C_' + curriculum +'_e_'+str(epochs)+'_s_'+str(static)+'_u_'+\
                 hidden_units_str+'_b_'+str(batch_size)+'_w_'+\
                 str(window_size)+'_c_'+conv_non_linear+'_d_'+\
                 str(dimension)+'_i_'+inputdir+'_n_'+str(norm)
     if use_pretrain:
-        resultdir += '_pretrain/'
+        resultdir += '_pretrain'
 
     print 'load Wv ...'
     Wv = cPickle.load(open(inputdir+'/Wv.p'))
 
-    # TODO: temp: test_filtered_short -> test_filtered, (same with train)
-    # if not os.path.isfile(inputdir+'/test.p') or for_test:
-    import dataset
-    dataset.data2pickle(inputdir+'/test.txt',
-                        inputdir+'/test.p', for_test, word_size=Wv.shape[0])
-    # if not os.path.isfile(inputdir+'/train.p') or for_test:
-    import dataset
-    dataset.data2pickle(inputdir+'/train.txt',
-                        inputdir+'/train.p', for_test, word_size=Wv.shape[0])
+    if not os.path.isfile(inputdir+'/test.p') or for_test:
+        import dataset
+        dataset.data2pickle(inputdir+'/test.txt',
+                            inputdir+'/test.p', for_test, word_size=Wv.shape[0])
+    if not os.path.isfile(inputdir+'/train.p') or for_test:
+        import dataset
+        dataset.data2pickle(inputdir+'/train.txt',
+                            inputdir+'/train.p', for_test, word_size=Wv.shape[0])
 
     testData = cPickle.load(open(inputdir+'/test.p'))
     trainData = cPickle.load(open(inputdir+'/train.p'))
@@ -876,38 +867,33 @@ if __name__ == "__main__":
     conv_layer_W = None
 
     if use_pretrain:
-        conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(train,
-                        test,
-                        Wv,
-                        PF1,
-                        PF2,
-                        filter_hs=window_size,
-                        conv_non_linear=conv_non_linear,
-                        hidden_units=hidden_units,
-                        activations_str=activations,
-                        shuffle_batch=True,
-                        epochs=1,
-                        static=static,
-                        directory=resultdir,
-                        inputdir=inputdir,
-                        norm=norm,
-                        batch_size=batch_size,
-                        curriculum=curriculum,
-                        for_test=for_test,
-                        rnd=rnd,
-                        )
-    else:
         data = os.listdir(inputdir + "/pre_trained_data")
-        resultdir += '_pretrain/'
-        data.sort(key=natural_keys)
         if len(data) != 0:
-            print "Loading pre-trained weights..."
-            [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
-            # you can remove this part if pickle file is saved with get_value return values.
-            conv_layer_W = conv_layer_W.get_value()
-            Wv = Wv.get_value()
-            PF1 = PF1.get_value()
-            PF2 = PF2.get_value()
+            data.sort(key=natural_keys)
+            print "Loading pre-trained weights... " + str(data[-1])
+            [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/weights_17_2366.p", "rb"))
+            # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
+        else:
+            conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(train,
+                            test,
+                            Wv,
+                            PF1,
+                            PF2,
+                            filter_hs=window_size,
+                            conv_non_linear=conv_non_linear,
+                            hidden_units=hidden_units,
+                            activations_str=activations,
+                            shuffle_batch=True,
+                            epochs=30,
+                            static=static,
+                            directory=resultdir,
+                            inputdir=inputdir,
+                            norm=norm,
+                            batch_size=batch_size,
+                            curriculum=curriculum,
+                            for_test=for_test,
+                            rnd=rnd,
+                            )
 
     train_conv_net(train,
                     test,
