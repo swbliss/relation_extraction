@@ -1,12 +1,13 @@
 from dataset import *
 import time
 import cPickle
+import math
 
 # Get new sentence with zero padding
 # TODO(swjung): This zero padding method is different from paper's implementation a bit. Follow the paper's method.
 def get_idx(sentence, filter_h=5, max_l=100):
 
-    pad = int(filter_h/2)
+    pad = int(math.ceil(filter_h/2.0))
     x = [0]*pad
     if len(sentence) < max_l:
         for ind in sentence:
@@ -44,7 +45,7 @@ def get_pf(sentLen, allIndice, filter_h=5, max_l=100):
         elif pf2[i] > 101:
             pf2[i] = 101
 
-    pad = int(filter_h/2)
+    pad = int(math.ceil(filter_h/2.0))
     x1 = [0]*pad
     x2 = [0]*pad
 
@@ -73,13 +74,26 @@ def make_idx_data_cv(data, filter_h, max_l):
         newSent = []
         newPos = []
         entitiesPos = ins.entitiesPos
+        newEPos = []
+
+        # Handling some weird entity positions
+        remove_eps = []
+        for i, pos in enumerate(entitiesPos):
+            if pos[0] > max_l - 1 or pos[1] > max_l - 1:
+                remove_eps.append(i)
+                num -= 1
 
         for i, sentence in enumerate(sentences):
+            if i in remove_eps:
+                continue
             idx = get_idx(sentence, filter_h, max_l)
             newSent.append(idx)
             pf = get_pf(len(sentence), positions[i], filter_h, max_l)
             newPos.append(pf)
-        newIns = InstanceBag(entities, rel, num, newSent, newPos, entitiesPos)
+            newEPos.append(entitiesPos[i])
+        if len(newSent) == 0:
+            continue
+        newIns = InstanceBag(entities, rel, num, newSent, newPos, newEPos)
         newData += [newIns]
 
     return newData

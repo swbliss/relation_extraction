@@ -398,7 +398,6 @@ class LeNetConvPoolLayer(object):
             index_shift = int(filter_shape[2]/2)
             for i in xrange(image_shape[0]):
                 #partition sentence via pool size
-                # TODO: reconsider adding index_shift is right
                 e1pos = pool_size[i, 0] + index_shift
                 e2pos = pool_size[i, 1] + index_shift
                 # if T.gt(e1pos, 0):

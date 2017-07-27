@@ -10,7 +10,8 @@ class InstanceBag(object):
         self.rel = rel
         self.num = num
         self.sentences = sentences
-        self.positions = positions          # position of entity in same order with entities list
+        self.positions = positions          # first: position of entity in same order with entities list
+                                            # later: position difference from entities
         self.entitiesPos = entitiesPos      # sorted position of entity
 
 def replace_unknown_words(x, word_size):

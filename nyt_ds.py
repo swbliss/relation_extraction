@@ -495,15 +495,14 @@ def train_conv_net(train,
 
     # copy the original param values
     params_origin = copy.deepcopy(params)
-    PF1W_origin = copy.deepcopy(PF1W)
 
-    for n_train_batches in used_train_batches[-1:]:
+    for n_train_batches in used_train_batches[-2:]:
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         print '\n' + str(now) + '\t batches ' + str(n_train_batches)
 
         epoch = 0
-        # for param_idx in range(len(params)):
-        #     params[param_idx] = params_origin[param_idx]
+        for param_idx in range(len(params)):
+            params[param_idx].set_value(params_origin[param_idx].get_value())
 
         while (epoch < epochs):
             # TODO: change this part to apply curriculum learning
@@ -610,7 +609,7 @@ def positive_evaluation(predict_results):
     sent = predict_results[4]
 
     positive_num = 0
-    #find the number of positive examples
+    # find the number of positive examples
     for yi in range(y_given.shape[0]):
         if y_given[yi, 0] > 0:
             positive_num += 1
@@ -821,10 +820,12 @@ if __name__ == "__main__":
     hidden_units.append(int(hu_str[-1]))
 
     # Read Wv, train, test datasets and save them in the form of python data structure with pickle.
-    if not os.path.isfile(inputdir+'/'+str(dimension)+'/Wv.p') or for_test:
+    if not os.path.isfile(inputdir+'/Wv.p') or for_test:
         import dataset
+        print '[' + time.asctime(time.localtime()) + '] making wv.p...'
         dataset.wv2pickle(inputdir+'/wv.txt', dimension,
                           inputdir+'/Wv.p', for_test=for_test)
+        print '[' + time.asctime(time.localtime()) + '] making wv.p finished.'
 
     resultdir = './' + 'C_' + curriculum +'_e_'+str(epochs)+'_s_'+str(static)+'_u_'+\
                 hidden_units_str+'_b_'+str(batch_size)+'_w_'+\
@@ -833,20 +834,27 @@ if __name__ == "__main__":
     if use_pretrain:
         resultdir += '_pretrain'
 
-    print 'load Wv ...'
+    print '[' + time.asctime(time.localtime()) + '] load Wv ...'
     Wv = cPickle.load(open(inputdir+'/Wv.p'))
+    print '[' + time.asctime(time.localtime()) + '] loading Wv finished.'
 
     if not os.path.isfile(inputdir+'/test.p') or for_test:
         import dataset
+        print '[' + time.asctime(time.localtime()) + '] making test.p...'
         dataset.data2pickle(inputdir+'/test.txt',
                             inputdir+'/test.p', for_test, word_size=Wv.shape[0])
+        print '[' + time.asctime(time.localtime()) + '] making test.p finished.'
     if not os.path.isfile(inputdir+'/train.p') or for_test:
         import dataset
+        print '[' + time.asctime(time.localtime()) + '] making train.p...'
         dataset.data2pickle(inputdir+'/train.txt',
                             inputdir+'/train.p', for_test, word_size=Wv.shape[0])
+        print '[' + time.asctime(time.localtime()) + '] making train.p finished.'
 
+    print 'load test/train ...'
     testData = cPickle.load(open(inputdir+'/test.p'))
     trainData = cPickle.load(open(inputdir+'/train.p'))
+    print 'loading test/train finished.'
     # testData = testData[1:5]
     # trainData = trainData[1:15]
     # tmp = inputdir.split('_')
@@ -870,8 +878,12 @@ if __name__ == "__main__":
         data = os.listdir(inputdir + "/pre_trained_data")
         if len(data) != 0:
             data.sort(key=natural_keys)
-            print "Loading pre-trained weights... " + str(data[-1])
-            [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/weights_17_2366.p", "rb"))
+            print '[' + time.asctime(time.localtime()) + \
+                  "] Loading pre-trained weights... " + str(data[-1])
+            [conv_layer_W, Wv, PF1, PF2] = pickle.load(
+                open(inputdir + "/pre_trained_data/weights_17_2366.p", "rb"))
+            print '[' + time.asctime(time.localtime()) + \
+                  "] Loading pre-trained weights finished! " + str(data[-1])
             # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
         else:
             conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(train,
@@ -895,6 +907,7 @@ if __name__ == "__main__":
                             rnd=rnd,
                             )
 
+    print '[' + time.asctime(time.localtime()) + "] train_conv_net started..."
     train_conv_net(train,
                     test,
                     Wv,
