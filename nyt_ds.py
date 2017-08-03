@@ -3,7 +3,9 @@ import os, sys, getopt
 import pickle
 from conv_net_classes import *
 from collections import OrderedDict
-from lasagne.updates import adagrad
+import lasagne
+from lasagne.updates import sgd
+from lasagne.updates import adagrad, adadelta
 import time, datetime
 import random
 import data2cv
@@ -70,6 +72,13 @@ def as_floatX(variable):
     if isinstance(variable, np.ndarray):
         return np.cast[theano.config.floatX](variable)
     return theano.tensor.cast(variable, theano.config.floatX)
+
+def my_updates(params):
+    updates = OrderedDict({})
+    for param in params:
+        updates[param] = param + 1
+    return updates
+
 def sgd_updates_adadelta(norm,params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_vec_name='Words'):
     """
     adadelta update rule, mostly from
@@ -336,6 +345,9 @@ def train_conv_net(train,
                     rnd=3435,
                    ):
     # T.config.exception_verbosity='high'
+    np.random.seed(rnd)
+    rng = np.random.RandomState(rnd)
+
     activations = []
     for act in activations_str:
         dropout_rate.append(0.5)
@@ -344,7 +356,6 @@ def train_conv_net(train,
         elif act.lower() == 'sigmoid':
             activations.append(Sigmoid)
 
-    rng = np.random.RandomState(rnd)
     img_h = len(train[0].sentences[0])# image height = 101
     filter_w = img_w # img_w = 50
     # All the sentence are transformed into a picture(2-d matrix). Pad with zeros.
@@ -353,69 +364,10 @@ def train_conv_net(train,
 
     feature_maps = hidden_units[0]
     filter_shape = (feature_maps, 1, filter_hs, filter_w+pf_dim*2)
-    # pool_size = (img_h-filter_hs+1, img_w-filter_w+1)
 
-    # index = T.lscalar()
-    x = T.imatrix('x')
-    p1 = T.imatrix('pf1')
-    p2 = T.imatrix('pf2')
-    pool_size = T.imatrix('pos')
-    y = T.ivector('y')
-
-    Words = theano.shared(value=U, name="Words")
-    PF1W = theano.shared(value=PF1, name="pf1w")
-    PF2W = theano.shared(value=PF2, name="pf2w")
-
-    zero_vec_tensor = T.vector()
-    zero_vec = np.zeros(img_w, dtype=theano.config.floatX)
-    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))])
-
-    zero_vec_tensor = T.vector()
-    zero_vec_pf = np.zeros(pf_dim, dtype=theano.config.floatX)
-    set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0,:], zero_vec_tensor))])
-    set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0,:], zero_vec_tensor))])
-
-    # The first input layer
-    # All the input tokens in a sentence are firstly transformed into vectors by looking up word embeddings.
-    input_words = Words[x.flatten()].reshape((x.shape[0], 1, x.shape[1], Words.shape[1]))
-    input_pf1 = PF1W[p1.flatten()].reshape((p1.shape[0], 1, p1.shape[1], pf_dim))
-    input_pf2 = PF2W[p2.flatten()].reshape((p2.shape[0], 1, p2.shape[1], pf_dim))
-
-    layer0_input = T.concatenate([input_words, input_pf1, input_pf2], axis=3)
-
-    conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
-                                    image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
-                                    filter_shape=filter_shape, pool_size=pool_size,
-                                    non_linear=conv_non_linear, max_window_len=3, W=conv_layer_W)
-    layer1_input = conv_layer.output.flatten(2)
-
-    # the number of hidden unit 0 equals to the features multiple the number of filter (100*1=100)
-    hidden_units[0] = feature_maps*3
-    classifier = MLPDropout(rng, input=layer1_input,
-                            layer_sizes=hidden_units,
-                            activations=activations,
-                            dropout_rates=dropout_rate)
-    params = classifier.params # sofmax parameters
-    params += conv_layer.params # conv parameters
-
-    if not static:  # if word vectors are allowed to change, add them as model parameters
-        params += [Words]
-        params += [PF1W]
-        params += [PF2W]
-
-    model_static = [(batch_size, 1, img_h, img_w+pf_dim*2), filter_shape, conv_non_linear, pool_size]
-    model_static += [rng, hidden_units, activations, dropout_rate]
-
-    #cost = classifier.negative_log_likelihood(y)
-    p_y_given_x = classifier.p_y_given_x
-    dropout_cost = classifier.dropout_negative_log_likelihood(y)
-    # grad_updates = adagrad(dropout_cost, params)
-    grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
-
-    #train data split
-    #shuffle train dataset and assign to mini batches.
-    np.random.seed(rnd)
-    #if dataset size is not a multiple of mini batches, replicate
+    # Train data splitting.
+    # Shuffle train dataset and assign to mini batches.
+    # If dataset size is not a multiple of mini batches, replicate
     if len(train) % batch_size > 0:
         extra_data_num = batch_size - len(train) % batch_size
         rand_train = np.random.permutation(train)
@@ -424,6 +376,7 @@ def train_conv_net(train,
     else:
         new_train = train
     new_train = np.random.permutation(new_train)
+    test = np.random.permutation(test)
 
     n_train_batches = new_train.shape[0]/batch_size
     valid = new_train[:n_train_batches//10*batch_size]
@@ -455,31 +408,6 @@ def train_conv_net(train,
             return length_sum / bag.num
         new_train = np.array(sorted(new_train, key=lambda bag: avg_sent_len(bag)))
 
-    [train_rels, train_nums, train_sents, train_poss, train_eposs] = bags_decompose(new_train)
-    [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
-    [test_rels, test_nums, test_sents, test_poss, test_eposs] = bags_decompose(test)
-
-    test_size = 1
-    test_input_words = Words[x.flatten()].reshape((x.shape[0], 1, x.shape[1], Words.shape[1]))
-    test_input_pf1 = PF1W[p1.flatten()].reshape((p1.shape[0], 1, p1.shape[1], pf_dim))
-    test_input_pf2 = PF2W[p2.flatten()].reshape((p2.shape[0], 1, p2.shape[1], pf_dim))
-
-    test_layer0_input = T.concatenate([test_input_words, test_input_pf1, test_input_pf2], axis=3)
-    test_layer0_output = conv_layer.predict(test_layer0_input, test_size, pool_size)
-    test_layer1_input = test_layer0_output.flatten(2)
-    p_y_given_x = classifier.predict_p(test_layer1_input)
-    test_one = theano.function([x, p1, p2, pool_size], p_y_given_x)
-    train_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost, updates=grad_updates,)
-    valid_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost)
-
-    #start training over mini-batches
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    print '... training start at  ' + str(now)
-    epoch = 0
-
-    if curriculum != "none":
-        epochs = 1
-
     # use gradually more dataset for fast learning experiment
     used_train_batches = []
     full_train_batches = n_train_batches
@@ -493,31 +421,111 @@ def train_conv_net(train,
             break
     used_train_batches.append(full_train_batches)
 
-    # copy the original param values
-    params_origin = copy.deepcopy(params)
+    for n_batches in used_train_batches[-1:]:
+        np.random.seed(rnd)
+        rng = np.random.RandomState(rnd)
 
-    for n_train_batches in used_train_batches[-2:]:
+        x = T.imatrix('x')
+        p1 = T.imatrix('pf1')
+        p2 = T.imatrix('pf2')
+        pool_size = T.imatrix('pos')
+        y = T.ivector('y')
+
+        Words = theano.shared(value=U, name="Words")
+        PF1W = theano.shared(value=PF1, name="pf1w")
+        PF2W = theano.shared(value=PF2, name="pf2w")
+
+        zero_vec_tensor = T.vector()
+        zero_vec = np.zeros(img_w, dtype=theano.config.floatX)
+        set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))])
+
+        zero_vec_tensor = T.vector()
+        zero_vec_pf = np.zeros(pf_dim, dtype=theano.config.floatX)
+        set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0,:], zero_vec_tensor))])
+        set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0,:], zero_vec_tensor))])
+
+        # The first input layer
+        # All the input tokens in a sentence are firstly transformed into vectors by looking up word embeddings.
+        input_words = Words[x.flatten()].reshape((x.shape[0], 1, x.shape[1], Words.shape[1]))
+        input_pf1 = PF1W[p1.flatten()].reshape((p1.shape[0], 1, p1.shape[1], pf_dim))
+        input_pf2 = PF2W[p2.flatten()].reshape((p2.shape[0], 1, p2.shape[1], pf_dim))
+
+        layer0_input = T.concatenate([input_words, input_pf1, input_pf2], axis=3)
+
+        conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
+                                        image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
+                                        filter_shape=filter_shape, pool_size=pool_size,
+                                        non_linear=conv_non_linear, max_window_len=3, W=conv_layer_W)
+        layer1_input = conv_layer.output.flatten(2)
+
+        # the number of hidden unit 0 equals to the features multiple the number of filter (100*1=100)
+        # hidden_units[0] = feature_maps*3
+        classifier = MLPDropout(rng, input=layer1_input,
+                                layer_sizes=[feature_maps*3, hidden_units[1]],
+                                activations=activations,
+                                dropout_rates=dropout_rate)
+        params = classifier.params # sofmax parameters
+        params += conv_layer.params # conv parameters
+
+        if not static:  # if word vectors are allowed to change, add them as model parameters
+            params += [Words]
+            params += [PF1W]
+            params += [PF2W]
+
+        [train_rels, train_nums, train_sents, train_poss, train_eposs] = bags_decompose(new_train)
+        [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
+        [test_rels, test_nums, test_sents, test_poss, test_eposs] = bags_decompose(test)
+
+        test_size = 1
+        test_input_words = Words[x.flatten()].reshape((x.shape[0], 1, x.shape[1], Words.shape[1]))
+        test_input_pf1 = PF1W[p1.flatten()].reshape((p1.shape[0], 1, p1.shape[1], pf_dim))
+        test_input_pf2 = PF2W[p2.flatten()].reshape((p2.shape[0], 1, p2.shape[1], pf_dim))
+
+        test_layer0_input = T.concatenate([test_input_words, test_input_pf1, test_input_pf2], axis=3)
+        test_layer0_output = conv_layer.predict(test_layer0_input, test_size, pool_size)
+        test_layer1_input = test_layer0_output.flatten(2)
+        p_y_given_x = classifier.predict_p(test_layer1_input)
+        test_one = theano.function([x, p1, p2, pool_size], p_y_given_x)
+
+        dropout_cost = classifier.dropout_negative_log_likelihood(y)
+        grad_updates = adadelta(dropout_cost, params, rho=lr_decay)
+        # grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
+        # grad_updates = sgd(dropout_cost, params, 1e-3)
+        # grad_updates = my_updates(params)
+        train_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost, updates=grad_updates,)
+        valid_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost)
+
+        #start training over mini-batches
         now = time.strftime("%Y-%m-%d %H:%M:%S")
-        print '\n' + str(now) + '\t batches ' + str(n_train_batches)
+        print '... training start at  ' + str(now)
 
+        if curriculum != "none":
+            epochs = 1
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        print '\n' + str(now) + '\t batches ' + str(n_batches)
         epoch = 0
-        for param_idx in range(len(params)):
-            params[param_idx].set_value(params_origin[param_idx].get_value())
 
         while (epoch < epochs):
             # TODO: change this part to apply curriculum learning
             if curriculum == "none":
-                for train_batch_idx in range(n_train_batches):
+                f_cost = open("ada_tmp_batch_cost", "w")
+                for train_batch_idx in range(n_batches):
+                    if train_batch_idx < 100 and n_batches == 18:
+                        for i in range(len(params)):
+                            params[i].get_value().tofile(open("ada_tmp_params_" + str(i) + "_" + str(train_batch_idx), "w"), sep=",")
                     inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
                     batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
                                                 train_eposs, test_one, img_h)
-                    train_model_batch(*batch_data)
+                    cost = train_model_batch(*batch_data)
+                    f_cost.write(str(cost) + "\n")
+
                     set_zero(zero_vec)
                     set_zero_pf1(zero_vec_pf)
                     set_zero_pf2(zero_vec_pf)
+                # f_cost.close()
             else:
-                step_size = n_train_batches/5 if n_train_batches/5 != 0 else 1
-                for progress in range(n_train_batches/5, n_train_batches + 1, step_size):
+                step_size = n_batches/5 if n_batches/5 != 0 else 1
+                for progress in range(n_batches/5, n_batches + 1, step_size):
                     prev_valid_cost = sys.maxint
                     iteration = 0               # number of epochs spent for each curriculum
                     wait_until_decrease = 0     # epochs spent for waiting decrease of validation cost
@@ -562,7 +570,7 @@ def train_conv_net(train,
             p = test_pr[0][-1]
             r = test_pr[1][-1]
 
-            dir_batch = directory + "_batches_" + str(n_train_batches) + "/"
+            dir_batch = directory + "_batches_" + str(n_batches) + "/"
 
             if not os.path.exists(dir_batch):
                 os.mkdir(dir_batch)
@@ -810,6 +818,10 @@ if __name__ == "__main__":
     epochs, static, hidden_units_str, batch_size,\
     window_size, conv_non_linear, dimension, inputdir, \
     norm, curriculum, for_test, use_pretrain, rnd = parse_argv(sys.argv[1:])
+
+    lasagne.random.set_rng(rnd)
+    np.random.seed(rnd)
+    random.seed(rnd)
 
     hu_str = hidden_units_str.split('_')
     hidden_units = [int(hu_str[0])]
