@@ -116,15 +116,13 @@ def sgd_updates_adadelta(norm,params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_
             updates[param] = stepped_param
     return updates
 
-def pre_train_get_batch_data(indices, rels, nums, sents, poss, eposs, img_h):
-    batch_rels = [rels[m][0] for m in indices]
+def pre_train_get_batch_data(indices, nums, sents, poss, eposs, img_h):
     batch_nums = [nums[m] for m in indices]
     batch_sents = [sents[m] for m in indices]
     batch_poss = [poss[m] for m in indices]
     batch_eposs = [eposs[m] for m in indices]
 
-    return pre_train_select_instance(batch_rels,
-                    batch_nums,
+    return pre_train_select_instance(batch_nums,
                     batch_sents,
                     batch_poss,
                     batch_eposs,
@@ -190,9 +188,7 @@ def pre_train_conv_net(train,
 
     feature_maps = hidden_units[0]
     filter_shape = (feature_maps, 1, filter_hs, filter_w+pf_dim*2)
-    # pool_size = (img_h-filter_hs+1, img_w-filter_w+1)
 
-    # index = T.lscalar()
     x = T.imatrix('x')
     p1 = T.imatrix('pf1')
     p2 = T.imatrix('pf2')
@@ -232,7 +228,6 @@ def pre_train_conv_net(train,
     skip_gram = SkipgramLayer(rng, input=layer1_input, n_in=feature_maps*3,
                               n_out=U.shape[0], for_test=for_test, inputdir=inputdir)
     params = skip_gram.params
-
     params += conv_layer.params # conv parameters
     print "--------[4]--------"
 
@@ -242,14 +237,15 @@ def pre_train_conv_net(train,
         params += [PF2W]
 
     cost = skip_gram.cost(context_words=context)
+    # grad_updates = sgd(cost, params, 1e-6)
     grad_updates = adagrad(cost, params)
     # grad_updates = sgd_updates_adadelta(norm, params, cost, lr_decay, 1e-6, sqr_norm_lim)
     print "--------[5]--------"
 
     # train data split
     # shuffle train dataset and assign to mini batches.
-    np.random.seed(rnd)
     #if dataset size is not a multiple of mini batches, replicate
+    np.random.seed(rnd)
     if len(train) % batch_size > 0:
         extra_data_num = batch_size - len(train) % batch_size
         rand_train = np.random.permutation(train)
@@ -260,7 +256,6 @@ def pre_train_conv_net(train,
     new_train = np.random.permutation(new_train)
 
     n_train_batches = new_train.shape[0]/batch_size
-    # n_train = new_train.shape[0]
     valid = new_train[:n_train_batches//10*batch_size]
     new_train = new_train[n_train_batches//10*batch_size:]
     n_train_batches = new_train.shape[0]/batch_size         # batch number of train data
@@ -271,12 +266,10 @@ def pre_train_conv_net(train,
     if curriculum == "none":
         new_train = np.random.permutation(new_train)
 
-    [train_rels, train_nums, train_sents, train_poss, train_eposs] = bags_decompose(new_train)
+    [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
     # [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
-
     train_model_batch = theano.function([x, p1, p2, pool_size, context], cost, updates=grad_updates,)
     # valid_model_batch = theano.function([x, p1, p2, pool_size, context], cost)
-
 
     #start training over mini-batches
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -292,7 +285,8 @@ def pre_train_conv_net(train,
         if curriculum == "none":
             for train_batch_idx in range(n_train_batches):
                 if train_batch_idx % 100 == 0:
-                    print(train_batch_idx)
+                    print(" [" + time.asctime(time.localtime(time.time())) +
+                          "] " + str(train_batch_idx))
                 if train_batch_idx % 500 == 0 or train_batch_idx == n_train_batches - 1:
                     print("#pre_training result saving: " +
                           str(train_batch_idx) + " [" +
@@ -303,7 +297,7 @@ def pre_train_conv_net(train,
                                      str(epoch) + "_" + str(train_batch_idx) +
                                      ".p", "wb"))
                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
-                batch_data = pre_train_get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
+                batch_data = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
                                             train_eposs, img_h)
                 cost = train_model_batch(*batch_data)
                 cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
@@ -685,8 +679,8 @@ def positive_evaluation(predict_results):
             wrong_label[1:], wrong_answer[1:], wrong_epos[1:], wrong_sent[1:]]
 
 
-def pre_train_select_instance(rels, nums, sents, poss, eposs, img_h):
-    numBags = len(rels)
+def pre_train_select_instance(nums, sents, poss, eposs, img_h):
+    numBags = len(sents)
     x = np.zeros((numBags, img_h), dtype='int32')
     p1 = np.zeros((numBags, img_h), dtype='int32')
     p2 = np.zeros((numBags, img_h), dtype='int32')
@@ -731,11 +725,9 @@ def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
                 insPf2 = np.asarray(insPos[1], dtype='int32').reshape((1, img_h))
                 insPool = np.asarray(eposs[bagIndex][m], dtype='int32').reshape((1, 2))
                 results = test_one(insX, insPf1, insPf2, insPool)
-                tmpMax = results.max()
-                if tmpMax > maxP:
+                p = results[0][y[bagIndex]]
+                if p > maxP:
                     maxIns = m
-            # else:
-            #     maxIns = 0
         x[bagIndex, :] = sents[bagIndex][maxIns]
         p1[bagIndex, :] = poss[bagIndex][maxIns][0]
         p2[bagIndex, :] = poss[bagIndex][maxIns][1]
@@ -791,6 +783,13 @@ def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
 
         predict_y[bagIndex] = pred_rel_type
     return [predict_y, predict_y_prob, y, significant_eposs, significant_sents]
+
+def pre_train_bags_decompose(data_bags):
+    bag_sent = [data_bag.sentences for data_bag in data_bags]
+    bag_pos = [data_bag.positions for data_bag in data_bags]
+    bag_num = [data_bag.num for data_bag in data_bags]
+    bag_epos = [data_bag.entitiesPos for data_bag in data_bags]
+    return [bag_num, bag_sent, bag_pos, bag_epos]
 
 def bags_decompose(data_bags):
     bag_sent = [data_bag.sentences for data_bag in data_bags]
@@ -850,6 +849,12 @@ if __name__ == "__main__":
     Wv = cPickle.load(open(inputdir+'/Wv.p'))
     print '[' + time.asctime(time.localtime()) + '] loading Wv finished.'
 
+    if (not os.path.isfile('data_figer/train.p') and use_pretrain) or for_test:
+        import dataset
+        print '[' + time.asctime(time.localtime()) + '] making pre_train.p...'
+        dataset.data2pickle('data_figer/train.txt',
+                            'data_figer/train.p', for_test, word_size=Wv.shape[0])
+        print '[' + time.asctime(time.localtime()) + '] making pre_train.p finished.'
     if not os.path.isfile(inputdir+'/test.p') or for_test:
         import dataset
         print '[' + time.asctime(time.localtime()) + '] making test.p...'
@@ -863,15 +868,19 @@ if __name__ == "__main__":
                             inputdir+'/train.p', for_test, word_size=Wv.shape[0])
         print '[' + time.asctime(time.localtime()) + '] making train.p finished.'
 
-    print 'load test/train ...'
+    print '[' + time.asctime(time.localtime()) + '] load pretrain/test/train ...'
+    if use_pretrain:
+        pretrainData = cPickle.load(open('data_figer/train.p'))
     testData = cPickle.load(open(inputdir+'/test.p'))
     trainData = cPickle.load(open(inputdir+'/train.p'))
-    print 'loading test/train finished.'
+    print '[' + time.asctime(time.localtime()) + '] loading pretrain/test/train finished.'
     # testData = testData[1:5]
     # trainData = trainData[1:15]
     # tmp = inputdir.split('_')
 
     # TODO: change this hard coding 80 to sentence length
+    if use_pretrain:
+        pretrain = data2cv.make_idx_data_cv(pretrainData, window_size, 80)#int(tmp[3]))
     test = data2cv.make_idx_data_cv(testData, window_size, 80)#int(tmp[3]))
     train = data2cv.make_idx_data_cv(trainData, window_size, 80)#int(tmp[3]))
 
@@ -893,12 +902,13 @@ if __name__ == "__main__":
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_17_2366.p", "rb"))
+                open(inputdir + "/pre_trained_data/weights_4_1000.p", "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
             # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
         else:
-            conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(train,
+            print '[' + time.asctime(time.localtime()) + "] pre_train_conv_net started..."
+            conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(pretrain,
                             test,
                             Wv,
                             PF1,
