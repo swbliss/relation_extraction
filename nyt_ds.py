@@ -13,7 +13,7 @@ import re
 import copy
 
 def parse_argv(argv):
-    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:b:w:c:d:i:n:C:tpr:",
+    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:n:C:tpr:",
                                ['epoch', 'static','hidden_units',
                                 'batch_size','window', 'active_function',
                                 'dimension','inputdir','norm', 'curriculum',
@@ -21,6 +21,7 @@ def parse_argv(argv):
     epochs = 30
     static = False
     hidden_units_str = '100_51'
+    max_l = 80
     batch_size = 50
     window_size =3
     conv_non_linear = 'tanh' # active fuction
@@ -38,6 +39,8 @@ def parse_argv(argv):
             static = bool(int(value))
         elif op == '-u':
             hidden_units_str = value
+        elif op == '-l':
+            max_l = int(value)
         elif op == '-b':
             batch_size = int(value)
         elif op == '-w':
@@ -62,7 +65,8 @@ def parse_argv(argv):
             #TODO (swjung): why we don't control hidden unints
             #usage()
             sys.exit()
-    return [epochs, static, hidden_units_str, batch_size, window_size, conv_non_linear, dimension,
+    return [epochs, static, hidden_units_str, max_l,
+            batch_size, window_size, conv_non_linear, dimension,
             inputdir, norm, curriculum, for_test, use_pretrain, rnd]
 
 def as_floatX(variable):
@@ -502,7 +506,6 @@ def train_conv_net(train,
         while (epoch < epochs):
             # TODO: change this part to apply curriculum learning
             if curriculum == "none":
-                f_cost = open("ada_tmp_batch_cost", "w")
                 for train_batch_idx in range(n_batches):
                     if train_batch_idx < 100 and n_batches == 18:
                         for i in range(len(params)):
@@ -511,12 +514,10 @@ def train_conv_net(train,
                     batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
                                                 train_eposs, test_one, img_h)
                     cost = train_model_batch(*batch_data)
-                    f_cost.write(str(cost) + "\n")
 
                     set_zero(zero_vec)
                     set_zero_pf1(zero_vec_pf)
                     set_zero_pf2(zero_vec_pf)
-                # f_cost.close()
             else:
                 step_size = n_batches/5 if n_batches/5 != 0 else 1
                 for progress in range(n_batches/5, n_batches + 1, step_size):
@@ -814,7 +815,7 @@ def natural_keys(text):
 
 
 if __name__ == "__main__":
-    epochs, static, hidden_units_str, batch_size,\
+    epochs, static, hidden_units_str, max_l, batch_size,\
     window_size, conv_non_linear, dimension, inputdir, \
     norm, curriculum, for_test, use_pretrain, rnd = parse_argv(sys.argv[1:])
 
@@ -878,21 +879,17 @@ if __name__ == "__main__":
     # trainData = trainData[1:15]
     # tmp = inputdir.split('_')
 
-    # TODO: change this hard coding 80 to sentence length
     if use_pretrain:
-        pretrain = data2cv.make_idx_data_cv(pretrainData, window_size, 80)#int(tmp[3]))
-    test = data2cv.make_idx_data_cv(testData, window_size, 80)#int(tmp[3]))
-    train = data2cv.make_idx_data_cv(trainData, window_size, 80)#int(tmp[3]))
+        pretrain = data2cv.make_idx_data_cv(pretrainData, window_size, max_l)
+    test = data2cv.make_idx_data_cv(testData, window_size, max_l)
+    train = data2cv.make_idx_data_cv(trainData, window_size, max_l)
 
     # Construct position embedding matrices.
-    # TODO: check why the size of PF is (101, 5), It looks like related with get_pf function (101)
     rng = np.random.RandomState(rnd)
-    PF1 = np.asarray(rng.uniform(low=-1, high=1, size=[101, 5]), dtype=theano.config.floatX)
-    padPF1 = np.zeros((1, 5), dtype=theano.config.floatX)
-    PF1 = np.vstack((padPF1, PF1))
-    PF2 = np.asarray(rng.uniform(low=-1, high=1, size=[101, 5]), dtype=theano.config.floatX)
-    padPF2 = np.zeros((1, 5), dtype=theano.config.floatX)
-    PF2 = np.vstack((padPF2, PF2))
+    PF1 = np.asarray(rng.uniform(
+        low=-1, high=1, size=[2*max_l - 1, 5]), dtype=theano.config.floatX)
+    PF2 = np.asarray(rng.uniform(
+        low=-1, high=1, size=[2*max_l - 1, 5]), dtype=theano.config.floatX)
     conv_layer_W = None
 
     if use_pretrain:

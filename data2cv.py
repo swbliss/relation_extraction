@@ -4,7 +4,6 @@ import cPickle
 import math
 
 # Get new sentence with zero padding
-# TODO(swjung): This zero padding method is different from paper's implementation a bit. Follow the paper's method.
 def get_idx(sentence, filter_h=5, max_l=100):
 
     pad = int(math.ceil(filter_h/2.0))
@@ -24,42 +23,26 @@ def get_idx(sentence, filter_h=5, max_l=100):
 def get_pf(sentLen, allIndice, filter_h=5, max_l=100):
 
     if sentLen < max_l:
-        #index = range(0, sentLen)
         index = np.arange(sentLen)
     else:
         index = np.arange(max_l)
-        #index = range(0, max_l)
 
-    pf1 = index - allIndice[0] + 1 + 51
-    pf2 = index - allIndice[1] + 1 + 51
+    sent_pf1 = index - allIndice[0] + (max_l - 1)
+    sent_pf2 = index - allIndice[1] + (max_l - 1)
 
-    for i, pf in enumerate(pf1):
-        if pf1[i] < 1:
-            pf1[i] = 1
-        # TODO(swjung): I think 101 should be replaced my (max_I + 1)
-        elif pf1[i] > 101:
-            pf1[i] = 101
-
-        if pf2[i] < 1:
-            pf2[i] = 1
-        elif pf2[i] > 101:
-            pf2[i] = 101
-
+    # padding the begining of sentence
     pad = int(math.ceil(filter_h/2.0))
-    x1 = [0]*pad
-    x2 = [0]*pad
+    pf1 = [-1]*pad
+    pf2 = [-1]*pad
 
-    x1.extend(pf1)
-    x2.extend(pf2)
-    #for i, pf in enumerate(pf1):
-    #    x1.append(pf1[i])
-    #    x2.append(pf2[i])
+    pf1.extend(sent_pf1)
+    pf2.extend(sent_pf2)
 
     #padding the end of sentence
-    while len(x1) < max_l+2*pad:
-        x1.append(0)
-        x2.append(0)
-    return [x1, x2]
+    while len(pf1) < max_l+2*pad:
+        pf1.append(-1)
+        pf2.append(-1)
+    return [pf1, pf2]
 
 # ouput: list of InstnaceBag
 # InstanceBag: bag of instances in the form (entities, rels, num,...) related with one entity pair
@@ -71,20 +54,20 @@ def make_idx_data_cv(data, filter_h, max_l):
         num = ins.num
         sentences = ins.sentences
         positions = ins.positions
+        entitiesPos = ins.entitiesPos
         newSent = []
         newPos = []
-        entitiesPos = ins.entitiesPos
         newEPos = []
 
         # Handling some weird entity positions
-        remove_eps = []
+        remove_idx = []
         for i, pos in enumerate(entitiesPos):
             if pos[0] > max_l - 1 or pos[1] > max_l - 1:
-                remove_eps.append(i)
+                remove_idx.append(i)
                 num -= 1
 
         for i, sentence in enumerate(sentences):
-            if i in remove_eps:
+            if i in remove_idx:
                 continue
             idx = get_idx(sentence, filter_h, max_l)
             newSent.append(idx)
