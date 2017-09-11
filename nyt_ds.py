@@ -120,6 +120,13 @@ def sgd_updates_adadelta(norm,params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_
             updates[param] = stepped_param
     return updates
 
+def L2_norm(params):
+    L2 = 0
+    ld = 1e-6
+    for param in params:
+        L2 += 0.5*ld*T.sum(T.sqr(param))
+    return L2
+
 def pre_train_get_batch_data(indices, nums, sents, poss, eposs, img_h):
     batch_nums = [nums[m] for m in indices]
     batch_sents = [sents[m] for m in indices]
@@ -134,12 +141,11 @@ def pre_train_get_batch_data(indices, nums, sents, poss, eposs, img_h):
 
 def get_batch_data(indices, rels, nums, sents, poss, eposs, test_one, img_h):
 
-    batch_rels = [rels[m][0] for m in indices]
+    batch_rels = [rels[m][0] for m in indices]  # only consider first relation.
     batch_nums = [nums[m] for m in indices]
     batch_sents = [sents[m] for m in indices]
     batch_poss = [poss[m] for m in indices]
     batch_eposs = [eposs[m] for m in indices]
-
 
     # TODO: change this part to remove MIL procedure
     return select_instance(batch_rels,
@@ -198,6 +204,7 @@ def pre_train_conv_net(train,
     p2 = T.imatrix('pf2')
     pool_size = T.imatrix('pos')
     context = T.imatrix('context')
+    neg = T.imatrix('neg')
 
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
@@ -240,9 +247,10 @@ def pre_train_conv_net(train,
         params += [PF1W]
         params += [PF2W]
 
-    cost = skip_gram.cost(context_words=context)
+    cost = skip_gram.cost(context_words=context, neg_samples=neg)
+    cost += L2_norm(params)
     # grad_updates = sgd(cost, params, 1e-6)
-    grad_updates = adagrad(cost, params)
+    grad_updates = adagrad(cost, params, learning_rate=0.05)
     # grad_updates = sgd_updates_adadelta(norm, params, cost, lr_decay, 1e-6, sqr_norm_lim)
     print "--------[5]--------"
 
@@ -272,7 +280,7 @@ def pre_train_conv_net(train,
 
     [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
     # [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
-    train_model_batch = theano.function([x, p1, p2, pool_size, context], cost, updates=grad_updates,)
+    train_model_batch = theano.function([neg, x, p1, p2, pool_size, context], cost, updates=grad_updates,)
     # valid_model_batch = theano.function([x, p1, p2, pool_size, context], cost)
 
     #start training over mini-batches
@@ -303,7 +311,9 @@ def pre_train_conv_net(train,
                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
                 batch_data = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
                                             train_eposs, img_h)
-                cost = train_model_batch(*batch_data)
+                neg = np.asarray(skip_gram.table.sample(batch_size*10, for_test), dtype='int32')\
+                    .reshape((batch_size, 10))
+                cost = train_model_batch(neg, *batch_data)
                 cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
                              " " + str(cost) + "\n")
                 set_zero(zero_vec)
@@ -419,7 +429,7 @@ def train_conv_net(train,
             break
     used_train_batches.append(full_train_batches)
 
-    for n_batches in used_train_batches[-1:]:
+    for n_batches in used_train_batches[:]:
         np.random.seed(rnd)
         rng = np.random.RandomState(rnd)
 
@@ -486,7 +496,9 @@ def train_conv_net(train,
         test_one = theano.function([x, p1, p2, pool_size], p_y_given_x)
 
         dropout_cost = classifier.dropout_negative_log_likelihood(y)
-        grad_updates = adadelta(dropout_cost, params, rho=lr_decay)
+        dropout_cost += L2_norm(params)
+        grad_updates = adagrad(dropout_cost, params, learning_rate=0.05)
+        # grad_updates = adadelta(dropout_cost, params, rho=lr_decay)
         # grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
         # grad_updates = sgd(dropout_cost, params, 1e-3)
         # grad_updates = my_updates(params)
@@ -507,9 +519,6 @@ def train_conv_net(train,
             # TODO: change this part to apply curriculum learning
             if curriculum == "none":
                 for train_batch_idx in range(n_batches):
-                    if train_batch_idx < 100 and n_batches == 18:
-                        for i in range(len(params)):
-                            params[i].get_value().tofile(open("ada_tmp_params_" + str(i) + "_" + str(train_batch_idx), "w"), sep=",")
                     inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
                     batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
                                                 train_eposs, test_one, img_h)
@@ -574,6 +583,17 @@ def train_conv_net(train,
             print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
             print '\n'
             epoch += 1
+
+            import os
+            if not "data_weights" in os.listdir():
+                os.mkdir("data_weights")
+            if use_pretrain:
+                 pickle.dump([params[0].get_value(), params[1].get_value()],
+                            open("data_weights/pre_weights_" + str(epoch) + ".p", "wb"))
+            else:
+                pickle.dump([params[0].get_value(), params[1].get_value()],
+                            open("data_weights/weights_" + str(epoch) + ".p", "wb"))
+
 
 def save_model(file, params):
     f = open(file, 'w')
@@ -899,7 +919,7 @@ if __name__ == "__main__":
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_4_1000.p", "rb"))
+                open(inputdir + "/pre_trained_data/weights_2_1683.p", "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
             # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
