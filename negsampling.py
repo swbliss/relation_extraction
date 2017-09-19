@@ -6,7 +6,7 @@ class VocabItem:
     def __init__(self, word):
         self.word = word
         self.count = 0
-        self.path = None # Path (list of indices) from the root to the word (leaf)
+        self.dict_idx = -1
 
 
 class Vocab:
@@ -109,7 +109,7 @@ class UnigramTable:
         table_size = int(1e8) # Length of the unigram table
         table = np.zeros(table_size, dtype=np.uint32)
 
-        print('Filling unigram table')
+        print('Filling unigram table...')
         p = 0 # Cumulative probability
         i = 0
         for j, unigram in enumerate(vocab):
@@ -121,7 +121,7 @@ class UnigramTable:
         self.vocab = vocab
 
         # process to get external word dictionary
-        f = open(dict_dir + "/dict.txt")
+        f = io.open(dict_dir + "/dict.txt", 'r', encoding='utf-8')
         self.word_dict = {}
         word_idx = 1
         while True:
@@ -131,23 +131,26 @@ class UnigramTable:
             word_idx += 1
         f.close()
 
+        # mapping vocab items to external word dict idx
+        print('Mapping vocab to dictionary...')
+        count = 0
+        import time
+        print(len(self.vocab.vocab_items))
+        for vocab in self.vocab.vocab_items:
+            if count%10000==0:
+                print('[' + time.asctime(time.localtime(time.time())) + '] ' + str(count))
+            if vocab.word in self.word_dict.keys():
+                vocab.dict_idx = self.word_dict[vocab.word]
+            count += 1
+
     def sample(self, count, for_test):
-        # get word index in word dictionary from word name
-        def get_word_idx(word):
-            word = word.lower()
-            if word in self.word_dict.keys():
-                if for_test and self.word_dict[word] > 5000:
-                    return -1
-                return self.word_dict[word]
-            else:
-                return -1
         """
         :param count: the number of samples to return.
         :return: array of index in vocabulary item list.
         """
         # TODO: change np.random.randint with rand state
         indices = np.random.randint(low=0, high=len(self.table), size=count)
-        return [get_word_idx(self.get_word_by_index(self.table[i])) for i in indices]
+        return [self.vocab.vocab_items[self.table[i]].dict_idx for i in indices]
 
     # get word name from index in table
     def get_word_by_index(self, idx):

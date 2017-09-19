@@ -203,8 +203,9 @@ def pre_train_conv_net(train,
     p1 = T.imatrix('pf1')
     p2 = T.imatrix('pf2')
     pool_size = T.imatrix('pos')
-    context = T.imatrix('context')
-    neg = T.imatrix('neg')
+    context = T.ftensor3('context')      # context words' embedding including entities and words around them
+    neg = T.ftensor3('neg')
+
 
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
@@ -244,10 +245,10 @@ def pre_train_conv_net(train,
 
     if not static:  # if word vectors are allowed to change, add them as model parameters
         params += [Words]
-        params += [PF1W]
-        params += [PF2W]
+    params += [PF1W]
+    params += [PF2W]
 
-    cost = skip_gram.cost(context_words=context, neg_samples=neg)
+    cost = skip_gram.cost(context_wvs=context, neg_wvs=neg)
     cost += L2_norm(params)
     # grad_updates = sgd(cost, params, 1e-6)
     grad_updates = adagrad(cost, params, learning_rate=0.05)
@@ -280,7 +281,7 @@ def pre_train_conv_net(train,
 
     [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
     # [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
-    train_model_batch = theano.function([neg, x, p1, p2, pool_size, context], cost, updates=grad_updates,)
+    train_model_batch = theano.function([x, p1, p2, pool_size, context, neg], cost, updates=grad_updates,)
     # valid_model_batch = theano.function([x, p1, p2, pool_size, context], cost)
 
     #start training over mini-batches
@@ -309,11 +310,27 @@ def pre_train_conv_net(train,
                                      str(epoch) + "_" + str(train_batch_idx) +
                                      ".p", "wb"))
                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
-                batch_data = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
+                x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
                                             train_eposs, img_h)
-                neg = np.asarray(skip_gram.table.sample(batch_size*10, for_test), dtype='int32')\
-                    .reshape((batch_size, 10))
-                cost = train_model_batch(neg, *batch_data)
+
+                context_wvs =  np.zeros((batch_size, img_w, context_idx.shape[1]), dtype=theano.config.floatX)
+                for batch_idx in range(batch_size):
+                    for c in range(len(context_idx[batch_idx])):
+                        context_wvs[batch_idx, :, c] = U[context_idx[batch_idx][c]]
+                        # context_wvs[batch_idx, :, c] = Words[context_idx[batch_idx][c]].eval()
+
+                neg_num = context_idx.shape[1]*10
+                neg_wvs =  np.zeros((batch_size, img_w, neg_num), dtype=theano.config.floatX)
+                neg_idx = np.asarray(skip_gram.table.sample(batch_size*neg_num, for_test), dtype='int32')\
+                    .reshape((batch_size, neg_num))
+                for batch_idx in range(batch_size):
+                    for n in range(len(neg_idx[batch_idx])):
+                        neg_wvs[batch_idx, :, n] = U[neg_idx[batch_idx][n]]
+                        # neg_wvs[batch_idx, :, n] = Words[neg_idx[batch_idx][n]].eval()
+
+                # batch_data = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
+                #                             train_eposs, img_h)
+                cost = train_model_batch(x, p1, p2, pool_size, context_wvs, neg_wvs)
                 cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
                              " " + str(cost) + "\n")
                 set_zero(zero_vec)
@@ -576,8 +593,10 @@ def train_conv_net(train,
 
             dir_batch = directory + "_batches_" + str(n_batches) + "/"
 
+            import os
             if not os.path.exists(dir_batch):
                 os.mkdir(dir_batch)
+
             save_pr(dir_batch+'test_pr_' + str(epoch) + '.txt', test_pr)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
@@ -585,7 +604,7 @@ def train_conv_net(train,
             epoch += 1
 
             import os
-            if not "data_weights" in os.listdir():
+            if not "data_weights" in os.listdir('.'):
                 os.mkdir("data_weights")
             if use_pretrain:
                  pickle.dump([params[0].get_value(), params[1].get_value()],
@@ -706,7 +725,7 @@ def pre_train_select_instance(nums, sents, poss, eposs, img_h):
     p1 = np.zeros((numBags, img_h), dtype='int32')
     p2 = np.zeros((numBags, img_h), dtype='int32')
     pool_size = np.zeros((numBags, 2), dtype='int32')
-    context = np.zeros((numBags, 10), dtype='int32')
+    context_idx = np.zeros((numBags, 10), dtype='int32')
 
     for bagIndex, insNum in enumerate(nums):
         maxIns = 0
@@ -720,12 +739,12 @@ def pre_train_select_instance(nums, sents, poss, eposs, img_h):
         for i in range(5):
             cursor1 = e1_poss - 2 + i
             cursor2 = e2_poss - 2 + i
-            context[bagIndex][i] = sents[bagIndex][maxIns][cursor1] \
+            context_idx[bagIndex][i] = sents[bagIndex][maxIns][cursor1] \
                 if cursor1 in range(len(sents[bagIndex][maxIns])) else 0
-            context[bagIndex][i + 5] = sents[bagIndex][maxIns][cursor2] \
+            context_idx[bagIndex][i + 5] = sents[bagIndex][maxIns][cursor2] \
                 if cursor2 in range(len(sents[bagIndex][maxIns])) else 0
 
-    return [x, p1, p2, pool_size, context]
+    return [x, p1, p2, pool_size, context_idx]
 
 def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
     numBags = len(rels)
@@ -919,7 +938,7 @@ if __name__ == "__main__":
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_2_1683.p", "rb"))
+                open(inputdir + "/pre_trained_data/weights_11_1683.p", "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
             # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
@@ -941,6 +960,7 @@ if __name__ == "__main__":
                             inputdir=inputdir,
                             norm=norm,
                             batch_size=batch_size,
+                            img_w=dimension,
                             curriculum=curriculum,
                             for_test=for_test,
                             rnd=rnd,
@@ -962,6 +982,7 @@ if __name__ == "__main__":
                     directory=resultdir,
                     norm=norm,
                     batch_size=batch_size,
+                    img_w=dimension,
                     curriculum=curriculum,
                     conv_layer_W=conv_layer_W,
                     use_pretrain=use_pretrain,

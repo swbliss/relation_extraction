@@ -470,20 +470,19 @@ class SkipgramLayer(object):
         self.params = [self.W]
         self.for_test = for_test
 
-    def cost(self, context_words, neg_samples):
+    def cost(self, context_wvs, neg_wvs):
         max_batch_size_supported = 10000
 
         # Minimize cross-entropy loss function
-
-        results, updates = theano.scan(lambda word_idx, batch_idx:
-                                       T.log(sigmoid(T.dot(self.input[batch_idx, :], self.W[:, word_idx]))),
+        results, updates = theano.scan(lambda context_wv, batch_idx:
+                                       T.log(sigmoid(T.dot(self.input[batch_idx, :], context_wvs[batch_idx, :, :]))),
                                        outputs_info=None,
-                                       sequences=[context_words, T.arange(max_batch_size_supported)])
+                                       sequences=[context_wvs, T.arange(max_batch_size_supported)])
 
         neg_results, _ = theano.scan(lambda word_idx, batch_idx:
                                      T.log(sigmoid(-T.dot(self.input[batch_idx, :],
-                                                          self.W[:, word_idx]))),
-                                     outputs_info=None, sequences=[neg_samples, T.arange(max_batch_size_supported)])
+                                                          neg_wvs[batch_idx, :, :]))),
+                                     outputs_info=None, sequences=[neg_wvs, T.arange(max_batch_size_supported)])
         '''
         self.table.sample(10, self.for_test)
         neg_results, _ = theano.scan(lambda word_idx, batch_idx:
