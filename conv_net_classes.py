@@ -459,30 +459,104 @@ class LeNetConvPoolLayer(object):
 
 class SkipgramLayer(object):
 
-    def __init__(self, rng, input, n_in, n_out, for_test, inputdir):
-        W_values = numpy.asarray(0.01*rng.standard_normal(size=(n_in, n_out)),
-                                 dtype=theano.config.floatX)
-        self.W = theano.shared(value=W_values, name="W")
+    def __init__(self, input, batch_size, img_w, for_test, inputdir):
         self.input = input
+        self.batch_size = batch_size
+        self.img_w = img_w
         self.table = negsampling.UnigramTable(dict_dir=inputdir)
-
-        # self.probability = T.nnet.softmax(T.dot(input, self.W))
-        self.params = [self.W]
         self.for_test = for_test
 
-    def cost(self, context_wvs, neg_wvs):
+    def cost(self, context_wvs, neg_wvs, mode):
         max_batch_size_supported = 10000
+
+        new_context_wvs = context_wvs
+        new_neg_wvs = neg_wvs
+
+        # mode 0: e1, e2, c1, c2, ..., c8
+        # mode 1: e1, e2, context_words_att
+        # mode 2: e1, e2, context_words_att(e1), context_words_att(e2)
+        # mode 3: e1_context_words_att, e2_context_words_att
+        # mode 4: context_words_att(all)
+        if mode == 1:
+            new_context_wvs = T.zeros_like(context_wvs[:, :, :3], dtype=theano.config.floatX)
+            for b in range(self.batch_size):
+                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                total_cos_sim = 0
+                for c in range(10):
+                    if c == 2:
+                        T.set_subtensor(new_context_wvs[b, :, 0], context_wvs[b, :, c])
+                    elif c == 7:
+                        T.set_subtensor(new_context_wvs[b, :, 1], context_wvs[b, :, c])
+                    else:
+                        cos_sim = T.dot(self.input[b], context_wvs[b, :, c])
+                        total_cos_sim += cos_sim
+                        c_wvs += cos_sim * context_wvs[b, :, c]
+                T.set_subtensor(new_context_wvs[b, :, 2], c_wvs/total_cos_sim)
+            new_neg_wvs = neg_wvs[:, :, :3*10]
+        elif mode == 2:
+            new_context_wvs = T.zeros_like(context_wvs[:, :, :4], dtype=theano.config.floatX)
+            for b in range(self.batch_size):
+                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                total_cos_sim = 0
+                c_wvs2 = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                total_cos_sim2 = 0
+                for c in range(10):
+                    if c == 2:
+                        T.set_subtensor(new_context_wvs[b, :, 0], context_wvs[b, :, c])
+                    elif c == 7:
+                        T.set_subtensor(new_context_wvs[b, :, 1], context_wvs[b, :, c])
+                    elif c < 5:
+                        cos_sim = T.dot(self.input[b], context_wvs[b, :, c])
+                        total_cos_sim += cos_sim
+                        c_wvs += cos_sim * context_wvs[b, :, c]
+                    else:
+                        cos_sim = T.dot(self.input[b], context_wvs[b, :, c])
+                        total_cos_sim2 += cos_sim
+                        c_wvs2 += cos_sim * context_wvs[b, :, c]
+                T.set_subtensor(new_context_wvs[b, :, 2], c_wvs/total_cos_sim)
+                T.set_subtensor(new_context_wvs[b, :, 3], c_wvs2/total_cos_sim2)
+            new_neg_wvs = neg_wvs[:, :, :4*10]
+        elif mode == 3:
+            new_context_wvs = T.zeros_like(context_wvs[:, :, :2], dtype=theano.config.floatX)
+            for b in range(self.batch_size):
+                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                total_cos_sim = 0
+                c_wvs2 = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                total_cos_sim2 = 0
+                for c in range(10):
+                    if c < 5:
+                        cos_sim = T.dot(self.input[b], context_wvs[b, :, c])
+                        total_cos_sim += cos_sim
+                        c_wvs += cos_sim * context_wvs[b, :, c]
+                    else:
+                        cos_sim = T.dot(self.input[b], context_wvs[b, :, c])
+                        total_cos_sim2 += cos_sim
+                        c_wvs2 += cos_sim * context_wvs[b, :, c]
+                T.set_subtensor(new_context_wvs[b, :, 0], c_wvs/total_cos_sim)
+                T.set_subtensor(new_context_wvs[b, :, 1], c_wvs2/total_cos_sim2)
+            new_neg_wvs = neg_wvs[:, :, :2*10]
+        elif mode == 4:
+            new_context_wvs = T.zeros_like(context_wvs[:, :, :1], dtype=theano.config.floatX)
+            for b in range(self.batch_size):
+                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                total_cos_sim = 0
+                for c in range(10):
+                    cos_sim = T.dot(self.input[b], context_wvs[b, :, c])
+                    total_cos_sim += cos_sim
+                    c_wvs += cos_sim * context_wvs[b, :, c]
+                T.set_subtensor(new_context_wvs[b, :, 0], c_wvs/total_cos_sim)
+            new_neg_wvs = neg_wvs[:, :, :10]
 
         # Minimize cross-entropy loss function
         results, updates = theano.scan(lambda context_wv, batch_idx:
                                        T.log(sigmoid(T.dot(self.input[batch_idx, :], context_wvs[batch_idx, :, :]))),
                                        outputs_info=None,
-                                       sequences=[context_wvs, T.arange(max_batch_size_supported)])
+                                       sequences=[new_context_wvs, T.arange(max_batch_size_supported)])
 
         neg_results, _ = theano.scan(lambda word_idx, batch_idx:
                                      T.log(sigmoid(-T.dot(self.input[batch_idx, :],
                                                           neg_wvs[batch_idx, :, :]))),
-                                     outputs_info=None, sequences=[neg_wvs, T.arange(max_batch_size_supported)])
+                                     outputs_info=None, sequences=[new_neg_wvs, T.arange(max_batch_size_supported)])
         '''
         self.table.sample(10, self.for_test)
         neg_results, _ = theano.scan(lambda word_idx, batch_idx:

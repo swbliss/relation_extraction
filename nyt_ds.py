@@ -237,10 +237,9 @@ def pre_train_conv_net(train,
     layer1_input = conv_layer.output.flatten(2)
     print "--------[3]--------"
 
-    skip_gram = SkipgramLayer(rng, input=layer1_input, n_in=feature_maps*3,
-                              n_out=U.shape[0], for_test=for_test, inputdir=inputdir)
-    params = skip_gram.params
-    params += conv_layer.params # conv parameters
+    skip_gram = SkipgramLayer(input=layer1_input, batch_size=batch_size,
+                              img_w=img_w, for_test=for_test, inputdir=inputdir)
+    params = conv_layer.params # conv parameters
     print "--------[4]--------"
 
     if not static:  # if word vectors are allowed to change, add them as model parameters
@@ -248,10 +247,11 @@ def pre_train_conv_net(train,
     params += [PF1W]
     params += [PF2W]
 
-    cost = skip_gram.cost(context_wvs=context, neg_wvs=neg)
+    cost = skip_gram.cost(context_wvs=context, neg_wvs=neg, mode=1)
     cost += L2_norm(params)
     # grad_updates = sgd(cost, params, 1e-6)
-    grad_updates = adagrad(cost, params, learning_rate=0.05)
+    grad_updates = adagrad(cost, params, learning_rate=0.1)
+    # grad_updates = adadelta(cost, params, rho=lr_decay)
     # grad_updates = sgd_updates_adadelta(norm, params, cost, lr_decay, 1e-6, sqr_norm_lim)
     print "--------[5]--------"
 
@@ -297,10 +297,10 @@ def pre_train_conv_net(train,
         print("\n### epoch " + str(epoch) + " ###")
         if curriculum == "none":
             for train_batch_idx in range(n_train_batches):
-                if train_batch_idx % 100 == 0:
+                if train_batch_idx % 400 == 0:
                     print(" [" + time.asctime(time.localtime(time.time())) +
                           "] " + str(train_batch_idx))
-                if train_batch_idx % 500 == 0 or train_batch_idx == n_train_batches - 1:
+                if train_batch_idx == n_train_batches - 1:
                     print("#pre_training result saving: " +
                           str(train_batch_idx) + " [" +
                           time.asctime(time.localtime(time.time())) + "]")
@@ -317,7 +317,6 @@ def pre_train_conv_net(train,
                 for batch_idx in range(batch_size):
                     for c in range(len(context_idx[batch_idx])):
                         context_wvs[batch_idx, :, c] = U[context_idx[batch_idx][c]]
-                        # context_wvs[batch_idx, :, c] = Words[context_idx[batch_idx][c]].eval()
 
                 neg_num = context_idx.shape[1]*10
                 neg_wvs =  np.zeros((batch_size, img_w, neg_num), dtype=theano.config.floatX)
@@ -326,10 +325,7 @@ def pre_train_conv_net(train,
                 for batch_idx in range(batch_size):
                     for n in range(len(neg_idx[batch_idx])):
                         neg_wvs[batch_idx, :, n] = U[neg_idx[batch_idx][n]]
-                        # neg_wvs[batch_idx, :, n] = Words[neg_idx[batch_idx][n]].eval()
 
-                # batch_data = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
-                #                             train_eposs, img_h)
                 cost = train_model_batch(x, p1, p2, pool_size, context_wvs, neg_wvs)
                 cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
                              " " + str(cost) + "\n")
@@ -494,8 +490,8 @@ def train_conv_net(train,
 
         if not static:  # if word vectors are allowed to change, add them as model parameters
             params += [Words]
-            params += [PF1W]
-            params += [PF2W]
+        params += [PF1W]
+        params += [PF2W]
 
         [train_rels, train_nums, train_sents, train_poss, train_eposs] = bags_decompose(new_train)
         [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
@@ -593,7 +589,6 @@ def train_conv_net(train,
 
             dir_batch = directory + "_batches_" + str(n_batches) + "/"
 
-            import os
             if not os.path.exists(dir_batch):
                 os.mkdir(dir_batch)
 
@@ -603,7 +598,6 @@ def train_conv_net(train,
             print '\n'
             epoch += 1
 
-            import os
             if not "data_weights" in os.listdir('.'):
                 os.mkdir("data_weights")
             if use_pretrain:
@@ -932,13 +926,15 @@ if __name__ == "__main__":
     conv_layer_W = None
 
     if use_pretrain:
+        if not os.path.exists(inputdir + "/pre_trained_data/"):
+            os.mkdir(inputdir + "/pre_trained_data/")
         data = os.listdir(inputdir + "/pre_trained_data")
         if len(data) != 0:
             data.sort(key=natural_keys)
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_11_1683.p", "rb"))
+                open(inputdir + "/pre_trained_data/weights_29_1683.p", "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
             # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
