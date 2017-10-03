@@ -206,7 +206,6 @@ def pre_train_conv_net(train,
     context = T.ftensor3('context')      # context words' embedding including entities and words around them
     neg = T.ftensor3('neg')
 
-
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
     PF2W = theano.shared(value=PF2, name="pf2w")
@@ -235,8 +234,8 @@ def pre_train_conv_net(train,
                                     filter_shape=filter_shape, pool_size=pool_size,
                                     non_linear=conv_non_linear, max_window_len=3)
     layer1_input = conv_layer.output.flatten(2)
-    print "--------[3]--------"
 
+    print "--------[3]--------"
     skip_gram = SkipgramLayer(input=layer1_input, batch_size=batch_size,
                               img_w=img_w, for_test=for_test, inputdir=inputdir)
     params = conv_layer.params # conv parameters
@@ -247,12 +246,13 @@ def pre_train_conv_net(train,
     params += [PF1W]
     params += [PF2W]
 
-    cost = skip_gram.cost(context_wvs=context, neg_wvs=neg, mode=1)
+    cost = skip_gram.cost(context_wvs=context, neg_wvs=neg, mode=0)
     cost += L2_norm(params)
     # grad_updates = sgd(cost, params, 1e-6)
-    grad_updates = adagrad(cost, params, learning_rate=0.1)
+    grad_updates = adagrad(cost, params, learning_rate=0.05)
     # grad_updates = adadelta(cost, params, rho=lr_decay)
     # grad_updates = sgd_updates_adadelta(norm, params, cost, lr_decay, 1e-6, sqr_norm_lim)
+
     print "--------[5]--------"
 
     # train data split
@@ -274,15 +274,12 @@ def pre_train_conv_net(train,
     n_train_batches = new_train.shape[0]/batch_size         # batch number of train data
     # n_valid_batches = valid.shape[0]/batch_size             # batch number of valid data
 
-
     # TODO: change this part to apply curriculum learning
     if curriculum == "none":
         new_train = np.random.permutation(new_train)
 
     [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
-    # [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(valid)
-    train_model_batch = theano.function([x, p1, p2, pool_size, context, neg], cost, updates=grad_updates,)
-    # valid_model_batch = theano.function([x, p1, p2, pool_size, context], cost)
+    train_model_batch = theano.function([x, p1, p2, pool_size, context, neg], cost, updates=grad_updates)
 
     #start training over mini-batches
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -607,6 +604,170 @@ def train_conv_net(train,
                 pickle.dump([params[0].get_value(), params[1].get_value()],
                             open("data_weights/weights_" + str(epoch) + ".p", "wb"))
 
+
+
+def calc_atts(train,
+                U,
+                PF1,
+                PF2,
+                filter_hs=3,
+                conv_non_linear="tanh",
+                hidden_units=[100, 51],
+                shuffle_batch=True,
+                epochs=25,
+                sqr_norm_lim=9,
+                lr_decay=0.95,
+                static=False,
+                batch_size=50,
+                img_w=50,
+                pf_dim=5,
+                norm=0,
+                dropout_rate=[0.5],
+                directory='./',
+                inputdir='./',
+                activations_str=[],
+                borrow=True,
+                curriculum="none",
+                conv_layer_W=None,
+                for_test=False,
+                rnd=3435,):
+
+    theano.config.on_unused_input = 'ignore'
+
+    activations = []
+    for act in activations_str:
+        dropout_rate.append(0.5)
+        if act.lower() == 'tanh':
+            activations.append(Tanh)
+        elif act.lower() == 'sigmoid':
+            activations.append(Sigmoid)
+
+    rng = np.random.RandomState(rnd)
+    img_h = len(train[0].sentences[0])# image height = 101
+    filter_w = img_w # img_w = 50
+    # All the sentence are transformed into a picture(2-d matrix). Pad with zeros.
+    # The width of the picture equals the dimension of word embedding.
+    # The height of the picture equals the number of tokens in the padded sentence.
+
+    feature_maps = hidden_units[0]
+    filter_shape = (feature_maps, 1, filter_hs, filter_w+pf_dim*2)
+
+    x = T.imatrix('x')
+    p1 = T.imatrix('pf1')
+    p2 = T.imatrix('pf2')
+    pool_size = T.imatrix('pos')
+    context = T.ftensor3('context')      # context words' embedding including entities and words around them
+    neg = T.ftensor3('neg')
+
+    Words = theano.shared(value=U, name="Words")
+    PF1W = theano.shared(value=PF1, name="pf1w")
+    PF2W = theano.shared(value=PF2, name="pf2w")
+    print "--------[1]--------"
+
+    zero_vec_tensor = T.vector()
+    zero_vec = np.zeros(img_w, dtype=theano.config.floatX)
+    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))])
+
+    zero_vec_tensor = T.vector()
+    zero_vec_pf = np.zeros(pf_dim, dtype=theano.config.floatX)
+    set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0,:], zero_vec_tensor))])
+    set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0,:], zero_vec_tensor))])
+    print "--------[2]--------"
+
+    # The first input layer
+    # All the input tokens in a sentence are firstly transformed into vectors by looking up word embeddings.
+    input_words = Words[x.flatten()].reshape((x.shape[0], 1, x.shape[1], Words.shape[1]))
+    input_pf1 = PF1W[p1.flatten()].reshape((p1.shape[0], 1, p1.shape[1], pf_dim))
+    input_pf2 = PF2W[p2.flatten()].reshape((p2.shape[0], 1, p2.shape[1], pf_dim))
+
+    layer0_input = T.concatenate([input_words, input_pf1, input_pf2], axis=3)
+
+    conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
+                                    image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
+                                    filter_shape=filter_shape, pool_size=pool_size,
+                                    non_linear=conv_non_linear, max_window_len=3, W=conv_layer_W)
+    layer1_input = conv_layer.output.flatten(2)
+
+    print "--------[5]--------"
+
+    # train data split
+    # shuffle train dataset and assign to mini batches.
+    #if dataset size is not a multiple of mini batches, replicate
+    np.random.seed(rnd)
+    if len(train) % batch_size > 0:
+        extra_data_num = batch_size - len(train) % batch_size
+        rand_train = np.random.permutation(train)
+        extra_data = rand_train[:extra_data_num]
+        new_train = np.append(train, extra_data, axis=0)
+    else:
+        new_train = train
+    new_train = np.random.permutation(new_train)
+
+    n_train_batches = new_train.shape[0]/batch_size
+    valid = new_train[:n_train_batches//10*batch_size]
+    new_train = new_train[n_train_batches//10*batch_size:]
+    n_train_batches = new_train.shape[0]/batch_size         # batch number of train data
+    # n_valid_batches = valid.shape[0]/batch_size             # batch number of valid data
+
+
+    # TODO: change this part to apply curriculum learning
+    if curriculum == "none":
+        new_train = np.random.permutation(new_train)
+
+    print "--------[3]--------"
+    skip_gram = SkipgramLayer(input=layer1_input, batch_size=batch_size,
+                              img_w=img_w, for_test=for_test, inputdir=inputdir)
+
+    atts = skip_gram.atts(context_wvs=context)
+
+    [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
+
+    # from theano.compile.monitormode import MonitorMode
+    # def inspect_inputs(i, node, fn):
+    #     print(i, node, "input(s) value(s): ", [input[0] for input in fn.inputs])
+    # def inspect_outputs(i, node, fn):
+    #     print(" output(s) value(s):", [output[0] for output in fn.outputs])
+
+    calc_input = theano.function([x, p1, p2, pool_size], layer1_input,)
+    calc_atts = theano.function([x, p1, p2, pool_size, context], atts)
+
+    #start training over mini-batches
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    print '... pre-training start at  ' + str(now)
+
+    atts_f = open(inputdir + "/pre_trained_data/atts", "w")
+    for train_batch_idx in range(n_train_batches):
+        if train_batch_idx % 400 == 0:
+            print(" [" + time.asctime(time.localtime(time.time())) +
+                  "] " + str(train_batch_idx))
+
+        inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
+        x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
+                                    train_eposs, img_h)
+
+        context_wvs =  np.zeros((batch_size, img_w, context_idx.shape[1]), dtype=theano.config.floatX)
+        for batch_idx in range(batch_size):
+            for c in range(len(context_idx[batch_idx])):
+                context_wvs[batch_idx, :, c] = U[context_idx[batch_idx][c]]
+
+        # input = calc_input(x, p1, p2, pool_size)
+        att_vals = calc_atts(x, p1, p2, pool_size, context_wvs)
+
+        # import math
+        # for b in range(batch_size):
+        #     for c in range(10):
+        #         if math.isnan(T.dot(input[b,:], context_wvs[b, : , c]).eval()):
+        #             import pdb;pdb.set_trace()
+
+        for b in range(batch_size):
+            atts_f.write(' '.join(map(lambda x: str(x), train_eposs[inst_indices[b]][0])) + '\n')
+            atts_f.write(' '.join(map(lambda x: str(x), train_sents[inst_indices[b]][0])) + '\n')
+            atts_f.write(' '.join(map(lambda x: str(x), att_vals[b])) + '\n')
+
+        set_zero(zero_vec)
+        set_zero_pf1(zero_vec_pf)
+        set_zero_pf2(zero_vec_pf)
+    atts_f.close()
 
 def save_model(file, params):
     f = open(file, 'w')
@@ -962,6 +1123,29 @@ if __name__ == "__main__":
                             rnd=rnd,
                             )
 
+    print '[' + time.asctime(time.localtime()) + "] calc_atts started..."
+    '''
+    calc_atts(pretrain,
+            Wv,
+            PF1,
+            PF2,
+            filter_hs=window_size,
+            conv_non_linear=conv_non_linear,
+            hidden_units=hidden_units,
+            activations_str=activations,
+            shuffle_batch=True,
+            epochs=epochs,
+            static=static,
+            directory=resultdir,
+            inputdir=inputdir,
+            norm=norm,
+            batch_size=batch_size,
+            img_w=dimension,
+            curriculum=curriculum,
+            conv_layer_W=conv_layer_W,
+            rnd=rnd)
+
+    '''
     print '[' + time.asctime(time.localtime()) + "] train_conv_net started..."
     train_conv_net(train,
                     test,
@@ -974,7 +1158,7 @@ if __name__ == "__main__":
                     activations_str=activations,
                     shuffle_batch=True,
                     epochs=epochs,
-                    static=static,
+
                     directory=resultdir,
                     norm=norm,
                     batch_size=batch_size,
