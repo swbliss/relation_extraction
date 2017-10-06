@@ -203,8 +203,10 @@ def pre_train_conv_net(train,
     p1 = T.imatrix('pf1')
     p2 = T.imatrix('pf2')
     pool_size = T.imatrix('pos')
-    context = T.ftensor3('context')      # context words' embedding including entities and words around them
-    neg = T.ftensor3('neg')
+    context = T.imatrix('context')
+    neg = T.imatrix('neg')
+    # context = T.ftensor3('context')      # context words' embedding including entities and words around them
+    # neg = T.ftensor3('neg')
 
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
@@ -231,12 +233,12 @@ def pre_train_conv_net(train,
 
     conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
                                     image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
-                                    filter_shape=filter_shape, pool_size=pool_size,
+
                                     non_linear=conv_non_linear, max_window_len=3)
     layer1_input = conv_layer.output.flatten(2)
 
     print "--------[3]--------"
-    skip_gram = SkipgramLayer(input=layer1_input, batch_size=batch_size,
+    skip_gram = SkipgramLayer(input=layer1_input, words=Words, batch_size=batch_size,
                               img_w=img_w, for_test=for_test, inputdir=inputdir)
     params = conv_layer.params # conv parameters
     print "--------[4]--------"
@@ -246,7 +248,7 @@ def pre_train_conv_net(train,
     params += [PF1W]
     params += [PF2W]
 
-    cost = skip_gram.cost(context_wvs=context, neg_wvs=neg, mode=0)
+    cost = skip_gram.cost(context_idx=context, neg_idx=neg, mode=4)
     cost += L2_norm(params)
     # grad_updates = sgd(cost, params, 1e-6)
     grad_updates = adagrad(cost, params, learning_rate=0.05)
@@ -310,20 +312,11 @@ def pre_train_conv_net(train,
                 x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
                                             train_eposs, img_h)
 
-                context_wvs =  np.zeros((batch_size, img_w, context_idx.shape[1]), dtype=theano.config.floatX)
-                for batch_idx in range(batch_size):
-                    for c in range(len(context_idx[batch_idx])):
-                        context_wvs[batch_idx, :, c] = U[context_idx[batch_idx][c]]
-
                 neg_num = context_idx.shape[1]*10
-                neg_wvs =  np.zeros((batch_size, img_w, neg_num), dtype=theano.config.floatX)
                 neg_idx = np.asarray(skip_gram.table.sample(batch_size*neg_num, for_test), dtype='int32')\
                     .reshape((batch_size, neg_num))
-                for batch_idx in range(batch_size):
-                    for n in range(len(neg_idx[batch_idx])):
-                        neg_wvs[batch_idx, :, n] = U[neg_idx[batch_idx][n]]
 
-                cost = train_model_batch(x, p1, p2, pool_size, context_wvs, neg_wvs)
+                cost = train_model_batch(x, p1, p2, pool_size, context_idx, neg_idx)
                 cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
                              " " + str(cost) + "\n")
                 set_zero(zero_vec)
@@ -656,8 +649,7 @@ def calc_atts(train,
     p1 = T.imatrix('pf1')
     p2 = T.imatrix('pf2')
     pool_size = T.imatrix('pos')
-    context = T.ftensor3('context')      # context words' embedding including entities and words around them
-    neg = T.ftensor3('neg')
+    context = T.imatrix('context')  # context words' embedding including entities and words around them
 
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
@@ -715,10 +707,10 @@ def calc_atts(train,
         new_train = np.random.permutation(new_train)
 
     print "--------[3]--------"
-    skip_gram = SkipgramLayer(input=layer1_input, batch_size=batch_size,
+    skip_gram = SkipgramLayer(input=layer1_input, words=Words, batch_size=batch_size,
                               img_w=img_w, for_test=for_test, inputdir=inputdir)
 
-    atts = skip_gram.atts(context_wvs=context)
+    atts = skip_gram.atts(context_idx=context)
 
     [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
 
@@ -728,7 +720,6 @@ def calc_atts(train,
     # def inspect_outputs(i, node, fn):
     #     print(" output(s) value(s):", [output[0] for output in fn.outputs])
 
-    calc_input = theano.function([x, p1, p2, pool_size], layer1_input,)
     calc_atts = theano.function([x, p1, p2, pool_size, context], atts)
 
     #start training over mini-batches
@@ -745,19 +736,7 @@ def calc_atts(train,
         x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
                                     train_eposs, img_h)
 
-        context_wvs =  np.zeros((batch_size, img_w, context_idx.shape[1]), dtype=theano.config.floatX)
-        for batch_idx in range(batch_size):
-            for c in range(len(context_idx[batch_idx])):
-                context_wvs[batch_idx, :, c] = U[context_idx[batch_idx][c]]
-
-        # input = calc_input(x, p1, p2, pool_size)
-        att_vals = calc_atts(x, p1, p2, pool_size, context_wvs)
-
-        # import math
-        # for b in range(batch_size):
-        #     for c in range(10):
-        #         if math.isnan(T.dot(input[b,:], context_wvs[b, : , c]).eval()):
-        #             import pdb;pdb.set_trace()
+        att_vals = calc_atts(x, p1, p2, pool_size, context_idx)
 
         for b in range(batch_size):
             atts_f.write(' '.join(map(lambda x: str(x), train_eposs[inst_indices[b]][0])) + '\n')
@@ -1086,6 +1065,9 @@ if __name__ == "__main__":
         low=-1, high=1, size=[2*max_l - 1, 5]), dtype=theano.config.floatX)
     conv_layer_W = None
 
+    import sys
+    sys.setrecursionlimit(1500)
+
     if use_pretrain:
         if not os.path.exists(inputdir + "/pre_trained_data/"):
             os.mkdir(inputdir + "/pre_trained_data/")
@@ -1095,7 +1077,7 @@ if __name__ == "__main__":
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_29_1683.p", "rb"))
+                open(inputdir + "/pre_trained_data/weights_8_1683.p", "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
             # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
@@ -1122,9 +1104,8 @@ if __name__ == "__main__":
                             for_test=for_test,
                             rnd=rnd,
                             )
-
-    print '[' + time.asctime(time.localtime()) + "] calc_atts started..."
     '''
+    print '[' + time.asctime(time.localtime()) + "] calc_atts started..."
     calc_atts(pretrain,
             Wv,
             PF1,

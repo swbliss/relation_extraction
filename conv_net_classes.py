@@ -459,15 +459,24 @@ class LeNetConvPoolLayer(object):
 
 class SkipgramLayer(object):
 
-    def __init__(self, input, batch_size, img_w, for_test, inputdir):
+    def __init__(self, input, words, batch_size, img_w, for_test, inputdir):
         self.input = input
+        self.words = words
         self.batch_size = batch_size
         self.img_w = img_w
         self.table = negsampling.UnigramTable(dict_dir=inputdir)
         self.for_test = for_test
 
-    def atts(self, context_wvs):
+    def _build_wvs(self, idx):
+        wvs = T.zeros((self.batch_size, self.img_w, 10), dtype=theano.config.floatX)
+        for batch_idx in range(self.batch_size):
+            for c in range(10):
+                wvs = T.set_subtensor(wvs[batch_idx, :, c], self.words[idx[batch_idx][c]])
+        return wvs
+
+    def atts(self, context_idx):
         atts = T.zeros((self.batch_size, 10), dtype=theano.config.floatX)
+        context_wvs = self._build_wvs(context_idx)
         for b in range(self.batch_size):
             total_cos_sim = 0
             for c in range(10):
@@ -479,9 +488,11 @@ class SkipgramLayer(object):
             atts = T.set_subtensor(atts[b, :], atts[b, :]/total_cos_sim)
         return atts
 
-    def cost(self, context_wvs, neg_wvs, mode):
+    def cost(self, context_idx, neg_idx, mode):
         max_batch_size_supported = 10000
 
+        context_wvs = self._build_wvs(context_idx)
+        neg_wvs = self._build_wvs(neg_idx)
         new_context_wvs = context_wvs
         new_neg_wvs = neg_wvs
 
