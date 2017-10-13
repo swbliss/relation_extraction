@@ -1,6 +1,8 @@
-import math
-import numpy as np
 import io
+import math
+
+import numpy as np
+
 
 class VocabItem:
     def __init__(self, word):
@@ -28,12 +30,12 @@ class Vocab:
                 if token not in vocab_hash:
                     vocab_hash[token] = len(vocab_items)
                     vocab_items.append(VocabItem(token))
-                    
-                #assert vocab_items[vocab_hash[token]].word == token, 'Wrong vocab_hash index'
+
+                # assert vocab_items[vocab_hash[token]].word == token, 'Wrong vocab_hash index'
                 vocab_items[vocab_hash[token]].count += 1
                 word_count += 1
-#if word_count % 100000 == 0:
-#print('Reading word %d' % word_count)
+            # if word_count % 100000 == 0:
+            # print('Reading word %d' % word_count)
 
             # Add special tokens <bol> (beginning of line) and <eol> (end of line)
             vocab_items[vocab_hash['<bol>']].count += 1
@@ -41,18 +43,18 @@ class Vocab:
             word_count += 2
 
         self.bytes = fi.tell()
-        self.vocab_items = vocab_items         # List of VocabItem objects
-        self.vocab_hash = vocab_hash           # Mapping from each token to its index in vocab
-        self.word_count = word_count           # Total number of words in train file
+        self.vocab_items = vocab_items  # List of VocabItem objects
+        self.vocab_hash = vocab_hash  # Mapping from each token to its index in vocab
+        self.word_count = word_count  # Total number of words in train file
 
         # Add special token <unk> (unknown),
         # merge words occurring less than min_count into <unk>, and
         # sort vocab in descending order by frequency in train file
         self.__sort(min_count)
 
-        #assert self.word_count == sum([t.count for t in self.vocab_items]), 'word_count and sum of t.count do not agree'
-#print('Total words in training file: %d' % self.word_count)
-#print('Total bytes in training file: %d' % self.bytes)
+        # assert self.word_count == sum([t.count for t in self.vocab_items]), 'word_count and sum of t.count do not agree'
+        # print('Total words in training file: %d' % self.word_count)
+        # print('Total bytes in training file: %d' % self.bytes)
         print('Vocab size: %d' % len(self))
 
     def __getitem__(self, i):
@@ -71,7 +73,7 @@ class Vocab:
         tmp = []
         tmp.append(VocabItem('<unk>'))
         unk_hash = 0
-        
+
         count_unk = 0
         for token in self.vocab_items:
             if token.count < min_count:
@@ -80,7 +82,7 @@ class Vocab:
             else:
                 tmp.append(token)
 
-        tmp.sort(key=lambda token : token.count, reverse=True)
+        tmp.sort(key=lambda token: token.count, reverse=True)
 
         # Update vocab_hash
         vocab_hash = {}
@@ -101,19 +103,20 @@ class UnigramTable:
     A list of indices of tokens in the vocab following a power law distribution,
     used to draw negative samples.
     """
+
     def __init__(self, dict_dir):
         vocab = Vocab(1)
         power = 0.75
-        norm = sum([math.pow(t.count, power) for t in vocab]) # Normalizing constant
+        norm = sum([math.pow(t.count, power) for t in vocab])  # Normalizing constant
 
-        table_size = int(1e8) # Length of the unigram table
+        table_size = int(1e8)  # Length of the unigram table
         table = np.zeros(table_size, dtype=np.uint32)
 
         print('Filling unigram table...')
-        p = 0 # Cumulative probability
+        p = 0  # Cumulative probability
         i = 0
         for j, unigram in enumerate(vocab):
-            p += float(math.pow(unigram.count, power))/norm
+            p += float(math.pow(unigram.count, power)) / norm
             while i < table_size and float(i) / table_size < p:
                 table[i] = j
                 i += 1
@@ -137,7 +140,7 @@ class UnigramTable:
         import time
         print(len(self.vocab.vocab_items))
         for vocab in self.vocab.vocab_items:
-            if count%10000==0:
+            if count % 10000 == 0:
                 print('[' + time.asctime(time.localtime(time.time())) + '] ' + str(count))
             if vocab.word in self.word_dict.keys():
                 vocab.dict_idx = self.word_dict[vocab.word]

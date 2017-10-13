@@ -1,4 +1,3 @@
-
 import numpy
 import theano
 from theano.tensor.nnet import conv2d
@@ -14,6 +13,7 @@ class HiddenLayer(object):
     """
     Class for HiddenLayer
     """
+
     def __init__(self, rng, input, n_in, n_out, activation, W=None, b=None,
                  use_bias=False):
 
@@ -49,31 +49,35 @@ class HiddenLayer(object):
         else:
             self.params = [self.W]
 
+
 def _dropout_from_layer(rng, layer, p):
     """p is the probablity of dropping a unit
 """
     srng = theano.tensor.shared_randomstreams.RandomStreams(rng.randint(999999))
     # p=1-p because 1's indicate keep and p is prob of dropping
-    mask = srng.binomial(n=1, p=1-p, size=layer.shape)
+    mask = srng.binomial(n=1, p=1 - p, size=layer.shape)
     # The cast is important because
     # int * float32 = float64 which pulls things off the gpu
     output = layer * T.cast(mask, theano.config.floatX)
     return output
 
+
 class DropoutHiddenLayer(HiddenLayer):
     def __init__(self, rng, input, n_in, n_out,
                  activation, dropout_rate, use_bias, W=None, b=None):
         super(DropoutHiddenLayer, self).__init__(
-                rng=rng, input=input, n_in=n_in, n_out=n_out, W=W, b=b,
-                activation=activation, use_bias=use_bias)
+            rng=rng, input=input, n_in=n_in, n_out=n_out, W=W, b=b,
+            activation=activation, use_bias=use_bias)
 
         self.output = _dropout_from_layer(rng, self.output, p=dropout_rate)
 
+
 class MLPDropout(object):
     """A multilayer perceptron with dropout"""
-    def __init__(self,rng,input,layer_sizes,dropout_rates,activations,use_bias=True):
 
-        #rectified_linear_activation = lambda x: T.maximum(0.0, x)
+    def __init__(self, rng, input, layer_sizes, dropout_rates, activations, use_bias=True):
+
+        # rectified_linear_activation = lambda x: T.maximum(0.0, x)
 
         # Set up all the hidden layers
         self.weight_matrix_sizes = zip(layer_sizes, layer_sizes[1:])
@@ -81,39 +85,39 @@ class MLPDropout(object):
         self.dropout_layers = []
         self.activations = activations
         next_layer_input = input
-        #first_layer = True
+        # first_layer = True
         # dropout the input
         next_dropout_layer_input = _dropout_from_layer(rng, input, p=dropout_rates[0])
         layer_counter = 0
         for n_in, n_out in self.weight_matrix_sizes[:-1]:
             next_dropout_layer = DropoutHiddenLayer(rng=rng,
-                    input=next_dropout_layer_input,
-                    activation=activations[layer_counter],
-                    n_in=n_in, n_out=n_out, use_bias=use_bias,
-                    dropout_rate=dropout_rates[layer_counter])
+                                                    input=next_dropout_layer_input,
+                                                    activation=activations[layer_counter],
+                                                    n_in=n_in, n_out=n_out, use_bias=use_bias,
+                                                    dropout_rate=dropout_rates[layer_counter])
             self.dropout_layers.append(next_dropout_layer)
             next_dropout_layer_input = next_dropout_layer.output
 
             # Reuse the parameters from the dropout layer here, in a different
             # path through the graph.
             next_layer = HiddenLayer(rng=rng,
-                    input=next_layer_input,
-                    activation=activations[layer_counter],
-                    # scale the weight matrix W with (1-p)
-                    W=next_dropout_layer.W * (1 - dropout_rates[layer_counter]),
-                    b=next_dropout_layer.b,
-                    n_in=n_in, n_out=n_out,
-                    use_bias=use_bias)
+                                     input=next_layer_input,
+                                     activation=activations[layer_counter],
+                                     # scale the weight matrix W with (1-p)
+                                     W=next_dropout_layer.W * (1 - dropout_rates[layer_counter]),
+                                     b=next_dropout_layer.b,
+                                     n_in=n_in, n_out=n_out,
+                                     use_bias=use_bias)
             self.layers.append(next_layer)
             next_layer_input = next_layer.output
-            #first_layer = False
+            # first_layer = False
             layer_counter += 1
 
         # Set up the output layer
         n_in, n_out = self.weight_matrix_sizes[-1]
         dropout_output_layer = LogisticRegression(
-                input=next_dropout_layer_input,
-                n_in=n_in, n_out=n_out)
+            input=next_dropout_layer_input,
+            n_in=n_in, n_out=n_out)
         self.dropout_layers.append(dropout_output_layer)
 
         # Again, reuse paramters in the dropout output.
@@ -136,13 +140,13 @@ class MLPDropout(object):
         # zdj added
         self.p_y_given_x = self.layers[-1].p_y_given_x
         # Grab all the parameters together.
-        self.params = [ param for layer in self.dropout_layers for param in layer.params ]
+        self.params = [param for layer in self.dropout_layers for param in layer.params]
 
     def predict(self, new_data):
         next_layer_input = new_data
         for i, layer in enumerate(self.layers):
-            if i < len(self.layers)-1:
-                next_layer_input = self.activations[i](T.dot(next_layer_input,layer.W) + layer.b)
+            if i < len(self.layers) - 1:
+                next_layer_input = self.activations[i](T.dot(next_layer_input, layer.W) + layer.b)
             else:
                 p_y_given_x = T.nnet.softmax(T.dot(next_layer_input, layer.W) + layer.b)
         y_pred = T.argmax(p_y_given_x, axis=1)
@@ -150,13 +154,14 @@ class MLPDropout(object):
 
     def predict_p(self, new_data):
         next_layer_input = new_data
-        for i,layer in enumerate(self.layers):
+        for i, layer in enumerate(self.layers):
             print i, layer
-            if i<len(self.layers)-1:
-                next_layer_input = self.activations[i](T.dot(next_layer_input,layer.W) + layer.b)
+            if i < len(self.layers) - 1:
+                next_layer_input = self.activations[i](T.dot(next_layer_input, layer.W) + layer.b)
             else:
                 p_y_given_x = T.nnet.softmax(T.dot(next_layer_input, layer.W) + layer.b)
         return p_y_given_x
+
 
 class MLP(object):
     """Multi-Layer Perceptron Class
@@ -221,6 +226,7 @@ class MLP(object):
         # made out of
         self.params = self.hiddenLayer.params + self.logRegressionLayer.params
 
+
 class LogisticRegression(object):
     """Multi-class Logistic Regression Class
 
@@ -250,16 +256,16 @@ class LogisticRegression(object):
         # initialize with 0 the weights W as a matrix of shape (n_in, n_out)
         if W is None:
             self.W = theano.shared(
-                    value=numpy.zeros((n_in, n_out), dtype=theano.config.floatX),
-                    name='W')
+                value=numpy.zeros((n_in, n_out), dtype=theano.config.floatX),
+                name='W')
         else:
             self.W = W
 
         # initialize the baises b as a vector of n_out 0s
         if b is None:
             self.b = theano.shared(
-                    value=numpy.zeros((n_out,), dtype=theano.config.floatX),
-                    name='b')
+                value=numpy.zeros((n_out,), dtype=theano.config.floatX),
+                name='b')
         else:
             self.b = b
 
@@ -314,7 +320,7 @@ class LogisticRegression(object):
         # check if y has same dimension of y_pred
         if y.ndim != self.y_pred.ndim:
             raise TypeError('y should have the same shape as self.y_pred',
-                ('y', y.type, 'y_pred', self.y_pred.type))
+                            ('y', y.type, 'y_pred', self.y_pred.type))
         # check if y is of the correct datatype
         if y.dtype.startswith('int'):
             # the T.neq operator returns a vector of 0s and 1s, where 1
@@ -322,6 +328,7 @@ class LogisticRegression(object):
             return T.mean(T.neq(self.y_pred, y))
         else:
             raise NotImplementedError()
+
 
 class LeNetConvPoolLayer(object):
     """Pool Layer of a convolutional network """
@@ -353,7 +360,7 @@ class LeNetConvPoolLayer(object):
         self.input = input
         self.filter_shape = filter_shape
         self.image_shape = image_shape
-        #self.poolsize = pool_size
+        # self.poolsize = pool_size
         self.non_linear = non_linear
         self.max_window_len = max_window_len
         # there are "num input feature maps * filter height * filter width"
@@ -362,26 +369,26 @@ class LeNetConvPoolLayer(object):
         # each unit in the lower layer receives a gradient from:
         # "num output feature maps * filter height * filter width" /
         #   pooling size
-        fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:])/image_shape[2])
+        fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / image_shape[2])
         # initialize weights with random weights
         if not isinstance(W, type(None)):
             avg = numpy.average(W)
             std = numpy.std(W)
             W = (W - avg) / std
-            W /= numpy.abs(numpy.max(W))*100
-            self.W = theano.shared(numpy.asarray(W, dtype=theano.config.floatX),borrow=True,name="W_conv")
-        elif self.non_linear=="none" or self.non_linear=="relu":
-            self.W = theano.shared(numpy.asarray(rng.uniform(low=-0.01,high=0.01,size=filter_shape),
-                                                dtype=theano.config.floatX),borrow=True,name="W_conv")
+            W /= numpy.abs(numpy.max(W)) * 100
+            self.W = theano.shared(numpy.asarray(W, dtype=theano.config.floatX), borrow=True, name="W_conv")
+        elif self.non_linear == "none" or self.non_linear == "relu":
+            self.W = theano.shared(numpy.asarray(rng.uniform(low=-0.01, high=0.01, size=filter_shape),
+                                                 dtype=theano.config.floatX), borrow=True, name="W_conv")
         else:
             W_bound = numpy.sqrt(6. / (fan_in + fan_out))
             self.W = theano.shared(numpy.asarray(rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
-                dtype=theano.config.floatX),borrow=True,name="W_conv")
+                                                 dtype=theano.config.floatX), borrow=True, name="W_conv")
         b_values = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX)
         self.b = theano.shared(value=b_values, borrow=True, name="b_conv")
 
         # convolve input feature maps with filters
-        conv_out = conv2d(input=input, filters=self.W,filter_shape=self.filter_shape, input_shape=self.image_shape)
+        conv_out = conv2d(input=input, filters=self.W, filter_shape=self.filter_shape, input_shape=self.image_shape)
         # conv_out = conv.conv2d(input=input, filters=self.W,filter_shape=self.filter_shape, image_shape=self.image_shape)
         pool_list = []
         if self.non_linear == "tanh" or self.non_linear == "relu" or self.non_linear == "sigmoid":
@@ -392,19 +399,19 @@ class LeNetConvPoolLayer(object):
             else:
                 conv_out_tanh = Sigmoid(conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))
 
-            #pad_len = int(self.max_window_len/2)
-            #right_pad_len = int(filter_shape[2]/2)
+            # pad_len = int(self.max_window_len/2)
+            # right_pad_len = int(filter_shape[2]/2)
             # index_shift = pad_len-right_pad_len
-            index_shift = int(filter_shape[2]/2)
+            index_shift = int(filter_shape[2] / 2)
             for i in xrange(image_shape[0]):
-                #partition sentence via pool size
+                # partition sentence via pool size
                 e1pos = pool_size[i, 0] + index_shift
                 e2pos = pool_size[i, 1] + index_shift
                 # if T.gt(e1pos, 0):
                 #     p1 = conv_out_tanh[i, :, :e1pos, :]
                 # else:
-                    # p1 = conv_out_tanh[i, :, 0, :].dimshuffle(0, 1, 'x', 2)
-                    # p1 = conv_out_tanh[i, :, 0:1, :]
+                # p1 = conv_out_tanh[i, :, 0, :].dimshuffle(0, 1, 'x', 2)
+                # p1 = conv_out_tanh[i, :, 0:1, :]
                 p1 = conv_out_tanh[i, :, :e1pos, :]
                 p2 = conv_out_tanh[i, :, e1pos:e2pos, :]
                 p3 = conv_out_tanh[i, :, e2pos:, :]
@@ -430,14 +437,14 @@ class LeNetConvPoolLayer(object):
         conv_out = conv2d(input=new_data, filters=self.W, filter_shape=self.filter_shape, input_shape=img_shape)
         # conv_out = conv.conv2d(input=new_data, filters=self.W, filter_shape=self.filter_shape, image_shape=img_shape)
         pool_list = []
-        if self.non_linear=="tanh":
+        if self.non_linear == "tanh":
             conv_out_tanh = T.tanh(conv_out + self.b.dimshuffle('x', 0, 'x', 'x'))
             # pad_len = int(self.max_window_len/2)
             # right_pad_len = int(self.filter_shape[2]/2)
             # index_shift = pad_len-right_pad_len
-            index_shift = int(self.filter_shape[2]/2)
+            index_shift = int(self.filter_shape[2] / 2)
             for i in xrange(batch_size):
-                #partition sentence via pool size
+                # partition sentence via pool size
                 e1pos = pool_size[i, 0] + index_shift
                 e2pos = pool_size[i, 1] + index_shift
                 # if T.gt(e1pos, 0):
@@ -457,14 +464,14 @@ class LeNetConvPoolLayer(object):
         output = T.concatenate(pool_list, axis=0)
         return output
 
-class SkipgramLayer(object):
 
+class SkipgramLayer(object):
     def __init__(self, input, words, batch_size, img_w, for_test, inputdir):
         self.input = input
         self.words = words
         self.batch_size = batch_size
         self.img_w = img_w
-        self.table = negsampling.UnigramTable(dict_dir=inputdir)
+        # self.table = negsampling.UnigramTable(dict_dir=inputdir)
         self.for_test = for_test
 
     def _build_wvs(self, idx):
@@ -480,12 +487,12 @@ class SkipgramLayer(object):
         for b in range(self.batch_size):
             total_cos_sim = 0
             for c in range(10):
-                if not (c == 2 or c == 7):
-                    cos_sim = T.exp(
-                        T.dot(self.input[b, :], context_wvs[b, :, c]))
-                    total_cos_sim += cos_sim
-                    atts = T.set_subtensor(atts[b, c], cos_sim)
-            atts = T.set_subtensor(atts[b, :], atts[b, :]/total_cos_sim)
+                # if not (c == 2 or c == 7):
+                cos_sim = T.exp(
+                    T.dot(self.input[b, :], context_wvs[b, :, c]))
+                total_cos_sim += cos_sim
+                atts = T.set_subtensor(atts[b, c], cos_sim)
+            atts = T.set_subtensor(atts[b, :], atts[b, :] / total_cos_sim)
         return atts
 
     def cost(self, context_idx, neg_idx, mode):
@@ -504,11 +511,11 @@ class SkipgramLayer(object):
         if mode == 1:
             new_context_wvs = T.zeros_like(context_wvs[:, :, :3], dtype=theano.config.floatX)
             for b in range(self.batch_size):
-                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                c_wvs = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim = 0
                 for c in range(10):
                     if c == 2:
-                        new_context_wvs =\
+                        new_context_wvs = \
                             T.set_subtensor(new_context_wvs[b, :, 0], context_wvs[b, :, c])
                     elif c == 7:
                         new_context_wvs = \
@@ -517,14 +524,14 @@ class SkipgramLayer(object):
                         cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                         total_cos_sim += cos_sim
                         c_wvs += cos_sim * context_wvs[b, :, c]
-                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 2], c_wvs/total_cos_sim)
-            new_neg_wvs = neg_wvs[:, :, :3*10]
+                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 2], c_wvs / total_cos_sim)
+            new_neg_wvs = neg_wvs[:, :, :3 * 10]
         elif mode == 2:
             new_context_wvs = T.zeros_like(context_wvs[:, :, :4], dtype=theano.config.floatX)
             for b in range(self.batch_size):
-                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                c_wvs = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim = 0
-                c_wvs2 = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                c_wvs2 = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim2 = 0
                 for c in range(10):
                     if c == 2:
@@ -532,7 +539,7 @@ class SkipgramLayer(object):
                             T.set_subtensor(new_context_wvs[b, :, 0], context_wvs[b, :, c])
                     elif c == 7:
                         new_context_wvs = \
-                          T.set_subtensor(new_context_wvs[b, :, 1], context_wvs[b, :, c])
+                            T.set_subtensor(new_context_wvs[b, :, 1], context_wvs[b, :, c])
                     elif c < 5:
                         cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                         total_cos_sim += cos_sim
@@ -541,15 +548,15 @@ class SkipgramLayer(object):
                         cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                         total_cos_sim2 += cos_sim
                         c_wvs2 += cos_sim * context_wvs[b, :, c]
-                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 2], c_wvs/total_cos_sim)
-                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 3], c_wvs2/total_cos_sim2)
-            new_neg_wvs = neg_wvs[:, :, :4*10]
+                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 2], c_wvs / total_cos_sim)
+                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 3], c_wvs2 / total_cos_sim2)
+            new_neg_wvs = neg_wvs[:, :, :4 * 10]
         elif mode == 3:
             new_context_wvs = T.zeros_like(context_wvs[:, :, :2], dtype=theano.config.floatX)
             for b in range(self.batch_size):
-                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                c_wvs = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim = 0
-                c_wvs2 = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                c_wvs2 = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim2 = 0
                 for c in range(10):
                     if c < 5:
@@ -560,19 +567,19 @@ class SkipgramLayer(object):
                         cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                         total_cos_sim2 += cos_sim
                         c_wvs2 += cos_sim * context_wvs[b, :, c]
-                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 0], c_wvs/total_cos_sim)
-                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 1], c_wvs2/total_cos_sim2)
-            new_neg_wvs = neg_wvs[:, :, :2*10]
+                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 0], c_wvs / total_cos_sim)
+                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 1], c_wvs2 / total_cos_sim2)
+            new_neg_wvs = neg_wvs[:, :, :2 * 10]
         elif mode == 4:
             new_context_wvs = T.zeros_like(context_wvs[:, :, :1], dtype=theano.config.floatX)
             for b in range(self.batch_size):
-                c_wvs = numpy.zeros((self.img_w, ), dtype=theano.config.floatX)
+                c_wvs = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim = 0
                 for c in range(10):
                     cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                     total_cos_sim += cos_sim
                     c_wvs += cos_sim * context_wvs[b, :, c]
-                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 0], c_wvs/total_cos_sim)
+                new_context_wvs = T.set_subtensor(new_context_wvs[b, :, 0], c_wvs / total_cos_sim)
             new_neg_wvs = neg_wvs[:, :, :10]
 
         # Minimize cross-entropy loss function

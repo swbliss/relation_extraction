@@ -1,27 +1,28 @@
-from dataset import *
-import time
 import cPickle
 import math
+import time
+
+from dataset import *
+
 
 # Get new sentence with zero padding
 def get_idx(sentence, filter_h=5, max_l=100):
-
-    pad = int(math.ceil(filter_h/2.0))
-    x = [0]*pad
+    pad = int(math.ceil(filter_h / 2.0))
+    x = [0] * pad
     if len(sentence) < max_l:
         for ind in sentence:
             x.append(ind)
     else:
         for i in xrange(max_l):
             x.append(sentence[i])
-    #padding the end of sentence
-    while len(x) < max_l+2*pad:
+    # padding the end of sentence
+    while len(x) < max_l + 2 * pad:
         x.append(0)
     return x
 
+
 # TODO(swjung): check what is the purpose of this function
 def get_pf(sentLen, allIndice, filter_h=5, max_l=100):
-
     if sentLen < max_l:
         index = np.arange(sentLen)
     else:
@@ -31,18 +32,19 @@ def get_pf(sentLen, allIndice, filter_h=5, max_l=100):
     sent_pf2 = index - allIndice[1] + (max_l - 1)
 
     # padding the begining of sentence
-    pad = int(math.ceil(filter_h/2.0))
-    pf1 = [-1]*pad
-    pf2 = [-1]*pad
+    pad = int(math.ceil(filter_h / 2.0))
+    pf1 = [-1] * pad
+    pf2 = [-1] * pad
 
     pf1.extend(sent_pf1)
     pf2.extend(sent_pf2)
 
-    #padding the end of sentence
-    while len(pf1) < max_l+2*pad:
+    # padding the end of sentence
+    while len(pf1) < max_l + 2 * pad:
         pf1.append(-1)
         pf2.append(-1)
     return [pf1, pf2]
+
 
 # ouput: list of InstnaceBag
 # InstanceBag: bag of instances in the form (entities, rels, num,...) related with one entity pair

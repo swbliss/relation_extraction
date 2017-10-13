@@ -16,10 +16,12 @@ word_dic.append("NONE")
 train_data = open("./gap_40_len_80/train_filtered.data")
 train_data_for_relation = open(
     "./gap_40_len_80/train_for_relation_" + "_".join(target_relation) + ".txt", "w")
-instances_for_relation = 1      # training instance for relation 5 2 -1 -1
+instances_for_relation = 1  # training instance for relation 5 2 -1 -1
+
 
 def index_to_word(idx_str):
     return " ".join(map(lambda x: word_dic[int(x)], idx_str.split(" ")))
+
 
 relation_types = {}
 while True:
@@ -44,6 +46,7 @@ while True:
         train_data_for_relation.write("\n")
 
 import operator
+
 sorted_relation_types = sorted(relation_types.items(), key=operator.itemgetter(1))
 
 count_list = []
@@ -53,7 +56,3 @@ print(count_list)
 word_file.close()
 train_data.close()
 train_data_for_relation.close()
-
-
-
-
