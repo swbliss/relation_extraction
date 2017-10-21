@@ -17,7 +17,7 @@ class Vocab:
         vocab_hash = {}
         word_count = 0
         self.filename = 'enwik8-clean'
-        fi = io.open('neg_sampling_data/%s' % self.filename, 'r', encoding='utf-16')
+        fi = io.open('data_neg_sampling/%s' % self.filename, 'r', encoding='utf-16')
 
         # Add special tokens <bol> (beginning of line) and <eol> (end of line)
         for token in ['<bol>', '<eol>']:

@@ -1,37 +1,50 @@
-from dataset import *
-import os, sys, getopt
+import getopt
+import os
 import pickle
-from conv_net_classes import *
-from collections import OrderedDict
-import lasagne
-from lasagne.updates import sgd
-from lasagne.updates import adagrad, adadelta
-import time, datetime
 import random
-import data2cv
 import re
-import copy
+import sys
+import time
+import dataset
+from collections import OrderedDict
+from enum import Enum
+
+import lasagne
+from lasagne.updates import adagrad
+from lasagne.updates import adadelta
+
+import data2cv
+from conv_net_classes import *
+from dataset import *
+from seq2seq import *
+
+class Pretrain(Enum):
+    NONE = 0
+    SKIPGRAM = 1
+    SEQ2SEQ = 2
 
 def parse_argv(argv):
-    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:n:C:tpr:",
-                               ['epoch', 'static','hidden_units',
-                                'batch_size','window', 'active_function',
-                                'dimension','inputdir','norm', 'curriculum',
-                                'test', 'pretrain', 'rnd'])
+    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:n:C:tp:r:S:m:",
+                               ['epoch', 'static', 'hidden_units',
+                                'batch_size', 'window', 'active_function',
+                                'dimension', 'inputdir', 'norm', 'curriculum',
+                                'test', 'pretrain', 'rnd',])
     epochs = 30
     static = False
     hidden_units_str = '100_51'
     max_l = 80
     batch_size = 50
-    window_size =3
-    conv_non_linear = 'tanh' # active fuction
+    window_size = 3
+    conv_non_linear = 'tanh'  # active fuction
     dimension = 50
     inputdir = './'
     norm = 0
     curriculum = 'none'
     for_test = False
-    use_pretrain = False
+    pretrain = 'none'
     rnd = 3435
+    context_size = 2
+    mode = 0
     for op, value in opts:
         if op == '-e':
             epochs = int(value)
@@ -51,23 +64,29 @@ def parse_argv(argv):
             dimension = int(value)
         elif op == '-i':
             inputdir = value
-        elif op =='-n':
+        elif op == '-n':
             norm = int(value)
         elif op == '-C':
             curriculum = value
         elif op == '-t':
             for_test = True
         elif op == '-p':
-            use_pretrain = True
+            pretrain = value
         elif op == '-r':
             rnd = int(value)
+        elif op == '-S':
+            context_size = int(value)
+        elif op == '-m':
+            mode = int(value)
         elif op == '-h':
-            #TODO (swjung): why we don't control hidden unints
-            #usage()
+            # TODO (swjung): why we don't control hidden unints
+            # usage()
             sys.exit()
     return [epochs, static, hidden_units_str, max_l,
             batch_size, window_size, conv_non_linear, dimension,
-            inputdir, norm, curriculum, for_test, use_pretrain, rnd]
+            inputdir, norm, curriculum, for_test, pretrain, rnd,
+            context_size, mode]
+
 
 def as_floatX(variable):
     if isinstance(variable, float):
@@ -77,13 +96,15 @@ def as_floatX(variable):
         return np.cast[theano.config.floatX](variable)
     return theano.tensor.cast(variable, theano.config.floatX)
 
+
 def my_updates(params):
     updates = OrderedDict({})
     for param in params:
         updates[param] = param + 1
     return updates
 
-def sgd_updates_adadelta(norm,params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_vec_name='Words'):
+
+def sgd_updates_adadelta(norm, params, cost, rho=0.95, epsilon=1e-6, norm_lim=9, word_vec_name='Words'):
     """
     adadelta update rule, mostly from
     https://groups.google.com/forum/#!topic/pylearn-dev/3QbKtCumAW4 (for Adadelta)
@@ -107,7 +128,7 @@ def sgd_updates_adadelta(norm,params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_
         updates[exp_su] = rho * exp_su + (1 - rho) * T.sqr(step)
         stepped_param = param + step
         if norm == 1:
-            if (param.get_value(borrow=True).ndim == 2) and param.name!='Words':
+            if (param.get_value(borrow=True).ndim == 2) and param.name != 'Words':
                 col_norms = T.sqrt(T.sum(T.sqr(stepped_param), axis=0))
                 desired_norms = T.clip(col_norms, 0, T.sqrt(norm_lim))
                 scale = desired_norms / (1e-7 + col_norms)
@@ -120,27 +141,31 @@ def sgd_updates_adadelta(norm,params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_
             updates[param] = stepped_param
     return updates
 
+
 def L2_norm(params):
     L2 = 0
     ld = 1e-6
     for param in params:
-        L2 += 0.5*ld*T.sum(T.sqr(param))
+        L2 += 0.5 * ld * T.sum(T.sqr(param))
     return L2
 
-def pre_train_get_batch_data(indices, nums, sents, poss, eposs, img_h):
+
+def pre_train_get_batch_data(
+        indices, nums, sents, poss, eposs, img_h, ctx_size):
     batch_nums = [nums[m] for m in indices]
     batch_sents = [sents[m] for m in indices]
     batch_poss = [poss[m] for m in indices]
     batch_eposs = [eposs[m] for m in indices]
 
     return pre_train_select_instance(batch_nums,
-                    batch_sents,
-                    batch_poss,
-                    batch_eposs,
-                    img_h)
+                                     batch_sents,
+                                     batch_poss,
+                                     batch_eposs,
+                                     img_h,
+                                     ctx_size)
+
 
 def get_batch_data(indices, rels, nums, sents, poss, eposs, test_one, img_h):
-
     batch_rels = [rels[m][0] for m in indices]  # only consider first relation.
     batch_nums = [nums[m] for m in indices]
     batch_sents = [sents[m] for m in indices]
@@ -149,38 +174,43 @@ def get_batch_data(indices, rels, nums, sents, poss, eposs, test_one, img_h):
 
     # TODO: change this part to remove MIL procedure
     return select_instance(batch_rels,
-                    batch_nums,
-                    batch_sents,
-                    batch_poss,
-                    batch_eposs,
-                    test_one, img_h)
+                           batch_nums,
+                           batch_sents,
+                           batch_poss,
+                           batch_eposs,
+                           test_one, img_h)
+
 
 def pre_train_conv_net(train,
-                    test,
-                    U,
-                    PF1,
-                    PF2,
-                    filter_hs=3,
-                    conv_non_linear="tanh",
-                    hidden_units=[100, 51],
-                    shuffle_batch=True,
-                    epochs=25,
-                    sqr_norm_lim=9,
-                    lr_decay=0.95,
-                    static=False,
-                    batch_size=50,
-                    img_w=50,
-                    pf_dim=5,
-                    norm=0,
-                    dropout_rate=[0.5],
-                    directory='./',
-                    inputdir='./',
-                    activations_str=[],
-                    borrow=True,
-                    curriculum="none",
-                    for_test=False,
-                    rnd=3435,):
-
+                       test,
+                       U,
+                       PF1,
+                       PF2,
+                       seq2seq_train,
+                       neg_table,
+                       filter_hs=3,
+                       conv_non_linear="tanh",
+                       hidden_units=[100, 51],
+                       shuffle_batch=True,
+                       epochs=20,
+                       sqr_norm_lim=9,
+                       lr_decay=0.95,
+                       static=False,
+                       batch_size=50,
+                       img_w=50,
+                       pf_dim=5,
+                       norm=0,
+                       dropout_rate=[0.5],
+                       directory='./',
+                       inputdir='./',
+                       activations_str=[],
+                       borrow=True,
+                       curriculum="none",
+                       for_test=False,
+                       rnd=3435,
+                       pretrain='skipgram',
+                       ctx_size=2,
+                       mode=0,):
     activations = []
     for act in activations_str:
         dropout_rate.append(0.5)
@@ -190,23 +220,22 @@ def pre_train_conv_net(train,
             activations.append(Sigmoid)
 
     rng = np.random.RandomState(rnd)
-    img_h = len(train[0].sentences[0])# image height = 101
-    filter_w = img_w # img_w = 50
+    img_h = len(train[0].sentences[0])  # image height = 101
+    filter_w = img_w  # img_w = 50
     # All the sentence are transformed into a picture(2-d matrix). Pad with zeros.
     # The width of the picture equals the dimension of word embedding.
     # The height of the picture equals the number of tokens in the padded sentence.
 
     feature_maps = hidden_units[0]
-    filter_shape = (feature_maps, 1, filter_hs, filter_w+pf_dim*2)
+    filter_shape = (feature_maps, 1, filter_hs, filter_w + pf_dim * 2)
 
     x = T.imatrix('x')
     p1 = T.imatrix('pf1')
     p2 = T.imatrix('pf2')
     pool_size = T.imatrix('pos')
     context = T.imatrix('context')
-    neg = T.imatrix('neg')
-    # context = T.ftensor3('context')      # context words' embedding including entities and words around them
-    # neg = T.ftensor3('neg')
+    neg = T.imatrix('neg') if pretrain==Pretrain.SKIPGRAM else T.itensor3('neg')
+    di, dm, dt = T.imatrices(3)  # decoderInput, decoderMast, decoderTarget
 
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
@@ -215,12 +244,12 @@ def pre_train_conv_net(train,
 
     zero_vec_tensor = T.vector()
     zero_vec = np.zeros(img_w, dtype=theano.config.floatX)
-    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))])
+    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0, :], zero_vec_tensor))])
 
     zero_vec_tensor = T.vector()
     zero_vec_pf = np.zeros(pf_dim, dtype=theano.config.floatX)
-    set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0,:], zero_vec_tensor))])
-    set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0,:], zero_vec_tensor))])
+    set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0, :], zero_vec_tensor))])
+    set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0, :], zero_vec_tensor))])
     print "--------[2]--------"
 
     # The first input layer
@@ -232,58 +261,93 @@ def pre_train_conv_net(train,
     layer0_input = T.concatenate([input_words, input_pf1, input_pf2], axis=3)
 
     conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
-                                    image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
-
+                                    image_shape=(batch_size, 1, img_h, img_w + pf_dim * 2),
+                                    filter_shape=filter_shape, pool_size=pool_size,
                                     non_linear=conv_non_linear, max_window_len=3)
+    params = conv_layer.params  # conv parameters
     layer1_input = conv_layer.output.flatten(2)
 
-    print "--------[3]--------"
-    skip_gram = SkipgramLayer(input=layer1_input, words=Words, batch_size=batch_size,
-                              img_w=img_w, for_test=for_test, inputdir=inputdir)
-    params = conv_layer.params # conv parameters
-    print "--------[4]--------"
+    assert(pretrain != Pretrain.NONE)
+    if pretrain == Pretrain.SKIPGRAM:   # Pre-training using skip-gram
+        output_layer = SkipgramLayer(
+            input=layer1_input, words=Words, batch_size=batch_size,img_w=img_w,
+            for_test=for_test, inputdir=inputdir, ctx_size=ctx_size, neg_table=neg_table)
+        cost = output_layer.cost(context_idx=context, neg_idx=neg, mode=mode)
+    else:   # Pre-training using seq2seq
+        output_layer = Seq2Seq(words=Words, input=layer1_input, voca_size=U.shape[0],
+                               hidden_size=U.shape[1], max_l=max_l, batch_size=batch_size,
+                               neg_num=10, lstm_layers_num=1, inputdir=inputdir, neg_table=neg_table)
+        cost = output_layer.cost(di, dm, dt, neg)
 
     if not static:  # if word vectors are allowed to change, add them as model parameters
         params += [Words]
     params += [PF1W]
     params += [PF2W]
 
-    cost = skip_gram.cost(context_idx=context, neg_idx=neg, mode=4)
     cost += L2_norm(params)
-    # grad_updates = sgd(cost, params, 1e-6)
     grad_updates = adagrad(cost, params, learning_rate=0.05)
+    # grad_updates = sgd(cost, params, 1e-6)
     # grad_updates = adadelta(cost, params, rho=lr_decay)
-    # grad_updates = sgd_updates_adadelta(norm, params, cost, lr_decay, 1e-6, sqr_norm_lim)
 
     print "--------[5]--------"
 
     # train data split
     # shuffle train dataset and assign to mini batches.
-    #if dataset size is not a multiple of mini batches, replicate
+    # if dataset size is not a multiple of mini batches, replicate
     np.random.seed(rnd)
+
     if len(train) % batch_size > 0:
         extra_data_num = batch_size - len(train) % batch_size
-        rand_train = np.random.permutation(train)
-        extra_data = rand_train[:extra_data_num]
-        new_train = np.append(train, extra_data, axis=0)
+        extra_data = train[:extra_data_num]
+        train = np.append(train, extra_data, axis=0)
+
+    # permutation = np.random.permutation(len(train))
+    # new_train = train[permutation]
+
+    n_train_batches = train.shape[0] / batch_size
+
+    new_decoder_inputs = None
+    new_decoder_targets = None
+    if pretrain == Pretrain.SEQ2SEQ:
+        decoder_inputs, decoder_targets = seq2seq_train
+        if len(decoder_inputs) % batch_size > 0:
+            extra_data = decoder_inputs[:, :extra_data_num]
+            decoder_inputs = np.append(decoder_inputs, extra_data, axis=1)
+            extra_data = decoder_targets[:, :extra_data_num]
+            decoder_targets = np.append(decoder_targets, extra_data, axis=1)
+
+        tmp = list(zip(train, decoder_inputs.T, decoder_targets.T))
+        np.random.shuffle(tmp)
+        new_train, new_decoder_inputs, new_decoder_targets = \
+            map(lambda x: np.array(x), zip(*tmp))
+        new_decoder_inputs = new_decoder_inputs.T
+        new_decoder_targets = new_decoder_targets.T
+
+        valid_decoder_inputs = new_decoder_inputs[:, :n_train_batches // 10 * batch_size]
+        valid_decoder_targets = new_decoder_targets[:, :n_train_batches // 10 * batch_size]
+        new_decoder_inputs = \
+            new_decoder_inputs[:, n_train_batches // 10 * batch_size:]
+        new_decoder_targets = \
+            new_decoder_targets[:, n_train_batches // 10 * batch_size:]
     else:
-        new_train = train
-    new_train = np.random.permutation(new_train)
+        new_train = np.random.permutation(train)
 
+    n_valid = n_train_batches // 10 * batch_size   # batch number of valid data
+    new_valid = new_train[:n_valid]
+    new_train = new_train[n_valid:]
     n_train_batches = new_train.shape[0]/batch_size
-    valid = new_train[:n_train_batches//10*batch_size]
-    new_train = new_train[n_train_batches//10*batch_size:]
-    n_train_batches = new_train.shape[0]/batch_size         # batch number of train data
-    # n_valid_batches = valid.shape[0]/batch_size             # batch number of valid data
-
-    # TODO: change this part to apply curriculum learning
-    if curriculum == "none":
-        new_train = np.random.permutation(new_train)
+    n_valid_batches = new_valid.shape[0]/batch_size
+    # # TODO: change this part to apply curriculum learning
+    # if curriculum == "none":
+    #     new_train = np.random.permutation(new_train)
 
     [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
-    train_model_batch = theano.function([x, p1, p2, pool_size, context, neg], cost, updates=grad_updates)
+    if pretrain == Pretrain.SKIPGRAM:
+        train_model_batch = theano.function([x, p1, p2, pool_size, context, neg], cost, updates=grad_updates)
+    else:
+        train_model_batch = theano.function([x, p1, p2, pool_size, di, dm, dt, neg], cost, updates=grad_updates, on_unused_input='ignore')
 
-    #start training over mini-batches
+    # start training over mini-batches
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     print '... pre-training start at  ' + str(now)
     epoch = 0
@@ -308,16 +372,28 @@ def pre_train_conv_net(train,
                                 open(inputdir + "/pre_trained_data/weights_" +
                                      str(epoch) + "_" + str(train_batch_idx) +
                                      ".p", "wb"))
+                    print("#pre_training result saving finished: " +
+                          str(train_batch_idx) + " [" +
+                          time.asctime(time.localtime(time.time())) + "]")
                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
-                x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
-                                            train_eposs, img_h)
+                x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(
+                    inst_indices, train_nums, train_sents, train_poss,
+                    train_eposs, img_h, ctx_size)
 
-                neg_num = context_idx.shape[1]*10
-                neg_idx = np.asarray(skip_gram.table.sample(batch_size*neg_num, for_test), dtype='int32')\
-                    .reshape((batch_size, neg_num))
+                if pretrain == Pretrain.SKIPGRAM:
+                    neg_num = context_idx.shape[1] * 10
+                    neg_idx = np.asarray(output_layer.table.sample(batch_size * neg_num, for_test), dtype='int32') \
+                        .reshape((batch_size, neg_num))
+                    cost = train_model_batch(x, p1, p2, pool_size, context_idx, neg_idx)
+                else:
+                    deIpt = new_decoder_inputs[:, inst_indices]
+                    deTgt = new_decoder_targets[:, inst_indices]
+                    deMst = utils_seq2seq.get_mask(deIpt)
+                    neg_idx = np.asarray(output_layer.table.sample(deIpt.shape[0]*batch_size*10, for_test), dtype='int32')\
+                        .reshape((deIpt.shape[0], batch_size, 10))
+                    cost = train_model_batch(x, p1, p2, pool_size, deIpt, deMst, deTgt, neg_idx)
 
-                cost = train_model_batch(x, p1, p2, pool_size, context_idx, neg_idx)
-                cost_f.write(str((epoch*n_train_batches) + train_batch_idx) +
+                cost_f.write(str((epoch * n_train_batches) + train_batch_idx) +
                              " " + str(cost) + "\n")
                 set_zero(zero_vec)
                 set_zero_pf1(zero_vec_pf)
@@ -330,30 +406,29 @@ def pre_train_conv_net(train,
 
 
 def train_conv_net(train,
-                    test,
-                    U,
-                    PF1,
-                    PF2,
-                    filter_hs=3,
-                    conv_non_linear="tanh",
-                    hidden_units=[100, 51],
-                    shuffle_batch=True,
-                    epochs=25,
-                    sqr_norm_lim=9,
-                    lr_decay=0.95,
-                    static=False,
-                    batch_size=50,
-                    img_w=50,
-                    pf_dim=5,
-                    norm=0,
-                    dropout_rate=[0.5],
-                    directory='./',
-                    activations_str=[],
-                    borrow=True,
-                    curriculum="none",
-                    conv_layer_W=None,
-                    use_pretrain=False,
-                    rnd=3435,
+                   test,
+                   U,
+                   PF1,
+                   PF2,
+                   filter_hs=3,
+                   conv_non_linear="tanh",
+                   hidden_units=[100, 51],
+                   shuffle_batch=True,
+                   epochs=25,
+                   sqr_norm_lim=9,
+                   lr_decay=0.95,
+                   static=False,
+                   batch_size=50,
+                   img_w=50,
+                   pf_dim=5,
+                   norm=0,
+                   dropout_rate=[0.5],
+                   directory='./',
+                   activations_str=[],
+                   borrow=True,
+                   curriculum="none",
+                   conv_layer_W=None,
+                   rnd=3435,
                    ):
     # T.config.exception_verbosity='high'
     np.random.seed(rnd)
@@ -367,14 +442,14 @@ def train_conv_net(train,
         elif act.lower() == 'sigmoid':
             activations.append(Sigmoid)
 
-    img_h = len(train[0].sentences[0])# image height = 101
-    filter_w = img_w # img_w = 50
+    img_h = len(train[0].sentences[0])  # image height = 101
+    filter_w = img_w  # img_w = 50
     # All the sentence are transformed into a picture(2-d matrix). Pad with zeros.
     # The width of the picture equals the dimension of word embedding.
     # The height of the picture equals the number of tokens in the padded sentence.
 
     feature_maps = hidden_units[0]
-    filter_shape = (feature_maps, 1, filter_hs, filter_w+pf_dim*2)
+    filter_shape = (feature_maps, 1, filter_hs, filter_w + pf_dim * 2)
 
     # Train data splitting.
     # Shuffle train dataset and assign to mini batches.
@@ -389,22 +464,23 @@ def train_conv_net(train,
     new_train = np.random.permutation(new_train)
     test = np.random.permutation(test)
 
-    n_train_batches = new_train.shape[0]/batch_size
-    valid = new_train[:n_train_batches//10*batch_size]
-    new_train = new_train[n_train_batches//10*batch_size:]
-    n_train_batches = new_train.shape[0]/batch_size         # batch number of train data
-    n_valid_batches = valid.shape[0]/batch_size             # batch number of valid data
+    n_train_batches = new_train.shape[0] / batch_size
+    valid = new_train[:n_train_batches // 10 * batch_size]
+    new_train = new_train[n_train_batches // 10 * batch_size:]
+    n_train_batches = new_train.shape[0] / batch_size  # batch number of train data
+    n_valid_batches = valid.shape[0] / batch_size  # batch number of valid data
 
     # TODO: change this part to apply curriculum learning
     if curriculum == "none":
-       new_train = np.random.permutation(np.array(new_train))
+        new_train = np.random.permutation(np.array(new_train))
     elif curriculum == "pos_diff":
         def avg_pos_diff(bag):
             pos_diff_sum = 0.0
             for i in range(bag.num):
                 pos_diff_sum += abs(bag.entitiesPos[i][0] - bag.entitiesPos[i][1])
-            return pos_diff_sum/bag.num
-        new_train = np.array(sorted(new_train,key = lambda bag : avg_pos_diff(bag)))
+            return pos_diff_sum / bag.num
+
+        new_train = np.array(sorted(new_train, key=lambda bag: avg_pos_diff(bag)))
     elif curriculum == "instance_num":
         new_train = np.array(sorted(new_train, key=lambda bag: bag.num, reverse=True))
     elif curriculum == "sentence_len":
@@ -412,11 +488,13 @@ def train_conv_net(train,
             temp = sent[:]
             temp.remove(0)
             return len(temp)
+
         def avg_sent_len(bag):
             length_sum = 0.0
             for sent in bag.sentences:
                 length_sum += original_length(sent)
             return length_sum / bag.num
+
         new_train = np.array(sorted(new_train, key=lambda bag: avg_sent_len(bag)))
 
     # use gradually more dataset for fast learning experiment
@@ -448,12 +526,14 @@ def train_conv_net(train,
 
         zero_vec_tensor = T.vector()
         zero_vec = np.zeros(img_w, dtype=theano.config.floatX)
-        set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))])
+        set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0, :], zero_vec_tensor))])
 
         zero_vec_tensor = T.vector()
         zero_vec_pf = np.zeros(pf_dim, dtype=theano.config.floatX)
-        set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0,:], zero_vec_tensor))])
-        set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0,:], zero_vec_tensor))])
+        set_zero_pf1 = theano.function([zero_vec_tensor],
+                                       updates=[(PF1W, T.set_subtensor(PF1W[0, :], zero_vec_tensor))])
+        set_zero_pf2 = theano.function([zero_vec_tensor],
+                                       updates=[(PF2W, T.set_subtensor(PF2W[0, :], zero_vec_tensor))])
 
         # The first input layer
         # All the input tokens in a sentence are firstly transformed into vectors by looking up word embeddings.
@@ -464,7 +544,7 @@ def train_conv_net(train,
         layer0_input = T.concatenate([input_words, input_pf1, input_pf2], axis=3)
 
         conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
-                                        image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
+                                        image_shape=(batch_size, 1, img_h, img_w + pf_dim * 2),
                                         filter_shape=filter_shape, pool_size=pool_size,
                                         non_linear=conv_non_linear, max_window_len=3, W=conv_layer_W)
         layer1_input = conv_layer.output.flatten(2)
@@ -472,11 +552,11 @@ def train_conv_net(train,
         # the number of hidden unit 0 equals to the features multiple the number of filter (100*1=100)
         # hidden_units[0] = feature_maps*3
         classifier = MLPDropout(rng, input=layer1_input,
-                                layer_sizes=[feature_maps*3, hidden_units[1]],
+                                layer_sizes=[feature_maps * 3, hidden_units[1]],
                                 activations=activations,
                                 dropout_rates=dropout_rate)
-        params = classifier.params # sofmax parameters
-        params += conv_layer.params # conv parameters
+        params = classifier.params  # sofmax parameters
+        params += conv_layer.params  # conv parameters
 
         if not static:  # if word vectors are allowed to change, add them as model parameters
             params += [Words]
@@ -505,10 +585,10 @@ def train_conv_net(train,
         # grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
         # grad_updates = sgd(dropout_cost, params, 1e-3)
         # grad_updates = my_updates(params)
-        train_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost, updates=grad_updates,)
+        train_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost, updates=grad_updates, )
         valid_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost)
 
-        #start training over mini-batches
+        # start training over mini-batches
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         print '... training start at  ' + str(now)
 
@@ -531,11 +611,11 @@ def train_conv_net(train,
                     set_zero_pf1(zero_vec_pf)
                     set_zero_pf2(zero_vec_pf)
             else:
-                step_size = n_batches/5 if n_batches/5 != 0 else 1
-                for progress in range(n_batches/5, n_batches + 1, step_size):
+                step_size = n_batches / 5 if n_batches / 5 != 0 else 1
+                for progress in range(n_batches / 5, n_batches + 1, step_size):
                     prev_valid_cost = sys.maxint
-                    iteration = 0               # number of epochs spent for each curriculum
-                    wait_until_decrease = 0     # epochs spent for waiting decrease of validation cost
+                    iteration = 0  # number of epochs spent for each curriculum
+                    wait_until_decrease = 0  # epochs spent for waiting decrease of validation cost
 
                     while True:
                         print "progress: " + str(progress / step_size) + ", iteration: ", str(iteration)
@@ -558,12 +638,12 @@ def train_conv_net(train,
                         print("validation cost: " + str(valid_cost))
 
                         iteration += 1
-                        if iteration >= 15:                      # 15 is the limit of epochs for each curriculum
+                        if iteration >= 15:  # 15 is the limit of epochs for each curriculum
                             break
 
                         if valid_cost >= prev_valid_cost:
                             wait_until_decrease += 1
-                            if wait_until_decrease > 4:        # 5 is the limit of waiting time for increase of val cost
+                            if wait_until_decrease > 4:  # 5 is the limit of waiting time for increase of val cost
                                 break
                         else:
                             prev_valid_cost = valid_cost
@@ -572,7 +652,8 @@ def train_conv_net(train,
             test_predict = predict_relation(test_rels, test_nums, test_sents, test_poss, test_eposs, test_one, img_h)
             test_pr = positive_evaluation(test_predict)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
-            print str(now) + '\t epoch ' + str(epoch) + ' test set PR = [' + str(test_pr[0][-1]) + ' ' + str(test_pr[1][-1]) + ']'
+            print str(now) + '\t epoch ' + str(epoch) + ' test set PR = [' + str(test_pr[0][-1]) + ' ' + str(
+                test_pr[1][-1]) + ']'
 
             p = test_pr[0][-1]
             r = test_pr[1][-1]
@@ -582,49 +663,38 @@ def train_conv_net(train,
             if not os.path.exists(dir_batch):
                 os.mkdir(dir_batch)
 
-            save_pr(dir_batch+'test_pr_' + str(epoch) + '.txt', test_pr)
+            save_pr(dir_batch + 'test_pr_' + str(epoch) + '.txt', test_pr)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
             print '\n'
             epoch += 1
 
-            if not "data_weights" in os.listdir('.'):
-                os.mkdir("data_weights")
-            if use_pretrain:
-                 pickle.dump([params[0].get_value(), params[1].get_value()],
-                            open("data_weights/pre_weights_" + str(epoch) + ".p", "wb"))
-            else:
-                pickle.dump([params[0].get_value(), params[1].get_value()],
-                            open("data_weights/weights_" + str(epoch) + ".p", "wb"))
-
-
 
 def calc_atts(train,
-                U,
-                PF1,
-                PF2,
-                filter_hs=3,
-                conv_non_linear="tanh",
-                hidden_units=[100, 51],
-                shuffle_batch=True,
-                epochs=25,
-                sqr_norm_lim=9,
-                lr_decay=0.95,
-                static=False,
-                batch_size=50,
-                img_w=50,
-                pf_dim=5,
-                norm=0,
-                dropout_rate=[0.5],
-                directory='./',
-                inputdir='./',
-                activations_str=[],
-                borrow=True,
-                curriculum="none",
-                conv_layer_W=None,
-                for_test=False,
-                rnd=3435,):
-
+              U,
+              PF1,
+              PF2,
+              filter_hs=3,
+              conv_non_linear="tanh",
+              hidden_units=[100, 51],
+              shuffle_batch=True,
+              epochs=25,
+              sqr_norm_lim=9,
+              lr_decay=0.95,
+              static=False,
+              batch_size=50,
+              img_w=50,
+              pf_dim=5,
+              norm=0,
+              dropout_rate=[0.5],
+              directory='./',
+              inputdir='./',
+              activations_str=[],
+              borrow=True,
+              curriculum="none",
+              conv_layer_W=None,
+              for_test=False,
+              rnd=3435, ):
     theano.config.on_unused_input = 'ignore'
 
     activations = []
@@ -636,14 +706,14 @@ def calc_atts(train,
             activations.append(Sigmoid)
 
     rng = np.random.RandomState(rnd)
-    img_h = len(train[0].sentences[0])# image height = 101
-    filter_w = img_w # img_w = 50
+    img_h = len(train[0].sentences[0])  # image height = 101
+    filter_w = img_w  # img_w = 50
     # All the sentence are transformed into a picture(2-d matrix). Pad with zeros.
     # The width of the picture equals the dimension of word embedding.
     # The height of the picture equals the number of tokens in the padded sentence.
 
     feature_maps = hidden_units[0]
-    filter_shape = (feature_maps, 1, filter_hs, filter_w+pf_dim*2)
+    filter_shape = (feature_maps, 1, filter_hs, filter_w + pf_dim * 2)
 
     x = T.imatrix('x')
     p1 = T.imatrix('pf1')
@@ -658,12 +728,12 @@ def calc_atts(train,
 
     zero_vec_tensor = T.vector()
     zero_vec = np.zeros(img_w, dtype=theano.config.floatX)
-    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))])
+    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0, :], zero_vec_tensor))])
 
     zero_vec_tensor = T.vector()
     zero_vec_pf = np.zeros(pf_dim, dtype=theano.config.floatX)
-    set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0,:], zero_vec_tensor))])
-    set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0,:], zero_vec_tensor))])
+    set_zero_pf1 = theano.function([zero_vec_tensor], updates=[(PF1W, T.set_subtensor(PF1W[0, :], zero_vec_tensor))])
+    set_zero_pf2 = theano.function([zero_vec_tensor], updates=[(PF2W, T.set_subtensor(PF2W[0, :], zero_vec_tensor))])
     print "--------[2]--------"
 
     # The first input layer
@@ -675,7 +745,7 @@ def calc_atts(train,
     layer0_input = T.concatenate([input_words, input_pf1, input_pf2], axis=3)
 
     conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
-                                    image_shape=(batch_size, 1, img_h, img_w+pf_dim*2),
+                                    image_shape=(batch_size, 1, img_h, img_w + pf_dim * 2),
                                     filter_shape=filter_shape, pool_size=pool_size,
                                     non_linear=conv_non_linear, max_window_len=3, W=conv_layer_W)
     layer1_input = conv_layer.output.flatten(2)
@@ -684,7 +754,7 @@ def calc_atts(train,
 
     # train data split
     # shuffle train dataset and assign to mini batches.
-    #if dataset size is not a multiple of mini batches, replicate
+    # if dataset size is not a multiple of mini batches, replicate
     np.random.seed(rnd)
     if len(train) % batch_size > 0:
         extra_data_num = batch_size - len(train) % batch_size
@@ -695,10 +765,10 @@ def calc_atts(train,
         new_train = train
     new_train = np.random.permutation(new_train)
 
-    n_train_batches = new_train.shape[0]/batch_size
-    valid = new_train[:n_train_batches//10*batch_size]
-    new_train = new_train[n_train_batches//10*batch_size:]
-    n_train_batches = new_train.shape[0]/batch_size         # batch number of train data
+    n_train_batches = new_train.shape[0] / batch_size
+    valid = new_train[:n_train_batches // 10 * batch_size]
+    new_train = new_train[n_train_batches // 10 * batch_size:]
+    n_train_batches = new_train.shape[0] / batch_size  # batch number of train data
     # n_valid_batches = valid.shape[0]/batch_size             # batch number of valid data
 
 
@@ -722,7 +792,7 @@ def calc_atts(train,
 
     calc_atts = theano.function([x, p1, p2, pool_size, context], atts)
 
-    #start training over mini-batches
+    # start training over mini-batches
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     print '... pre-training start at  ' + str(now)
 
@@ -734,7 +804,7 @@ def calc_atts(train,
 
         inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
         x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
-                                    train_eposs, img_h)
+                                                                     train_eposs, img_h)
 
         att_vals = calc_atts(x, p1, p2, pool_size, context_idx)
 
@@ -748,10 +818,12 @@ def calc_atts(train,
         set_zero_pf2(zero_vec_pf)
     atts_f.close()
 
+
 def save_model(file, params):
     f = open(file, 'w')
     cPickle.dump(params, f, -1)
     f.close()
+
 
 def save_pr(file, pr):
     f = open(file, 'w')
@@ -776,6 +848,7 @@ def save_pr(file, pr):
 
     f.close()
     f2.close()
+
 
 def positive_evaluation(predict_results):
     predict_y = predict_results[0]
@@ -813,8 +886,8 @@ def positive_evaluation(predict_results):
         wrong_sent.append(sent)
 
     for i in range(y_given.shape[0]):
-        labels = y_given[index[i],:] # key given labels
-        py = predict_y[index[i]] # answer
+        labels = y_given[index[i], :]  # key given labels
+        py = predict_y[index[i]]  # answer
 
         if labels[0] == 0:
             # NA bag
@@ -832,7 +905,7 @@ def positive_evaluation(predict_results):
                     if j == -1:
                         break
                     if py == labels[j]:
-                        flag = True # true positive
+                        flag = True  # true positive
                         break
                 if flag:
                     t_p += 1
@@ -840,11 +913,11 @@ def positive_evaluation(predict_results):
                     f_p += 1
                     append_wrong_case(
                         labels, py, epos[index[i]], sent[index[i]])
-        if (t_p+f_p) == 0:
+        if (t_p + f_p) == 0:
             precision = 1
         else:
-            precision = float(t_p)/(t_p+f_p)
-        recall = float(t_p)/positive_num
+            precision = float(t_p) / (t_p + f_p)
+        recall = float(t_p) / positive_num
         if precision != all_pre[-1] or recall != all_rec[-1]:
             all_pre.append(precision)
             all_rec.append(recall)
@@ -853,32 +926,33 @@ def positive_evaluation(predict_results):
             wrong_label[1:], wrong_answer[1:], wrong_epos[1:], wrong_sent[1:]]
 
 
-def pre_train_select_instance(nums, sents, poss, eposs, img_h):
+def pre_train_select_instance(nums, sents, poss, eposs, img_h, ctx_size):
     numBags = len(sents)
     x = np.zeros((numBags, img_h), dtype='int32')
     p1 = np.zeros((numBags, img_h), dtype='int32')
     p2 = np.zeros((numBags, img_h), dtype='int32')
     pool_size = np.zeros((numBags, 2), dtype='int32')
-    context_idx = np.zeros((numBags, 10), dtype='int32')
+    context_idx = np.zeros((numBags, 2 + ctx_size*4), dtype='int32')
 
     for bagIndex, insNum in enumerate(nums):
         maxIns = 0
-        x[bagIndex,:] = sents[bagIndex][maxIns]
-        p1[bagIndex,:] = poss[bagIndex][maxIns][0]
-        p2[bagIndex,:] = poss[bagIndex][maxIns][1]
-        pool_size[bagIndex,:] = eposs[bagIndex][maxIns]
+        x[bagIndex, :] = sents[bagIndex][maxIns]
+        p1[bagIndex, :] = poss[bagIndex][maxIns][0]
+        p2[bagIndex, :] = poss[bagIndex][maxIns][1]
+        pool_size[bagIndex, :] = eposs[bagIndex][maxIns]
         e1_poss = eposs[bagIndex][maxIns][0]
         e2_poss = eposs[bagIndex][maxIns][1]
 
-        for i in range(5):
-            cursor1 = e1_poss - 2 + i
-            cursor2 = e2_poss - 2 + i
+        for i in range(1 + ctx_size*2):
+            cursor1 = e1_poss - ctx_size + i
+            cursor2 = e2_poss - ctx_size + i
             context_idx[bagIndex][i] = sents[bagIndex][maxIns][cursor1] \
                 if cursor1 in range(len(sents[bagIndex][maxIns])) else 0
-            context_idx[bagIndex][i + 5] = sents[bagIndex][maxIns][cursor2] \
+            context_idx[bagIndex][i + (1 + ctx_size*2)] = sents[bagIndex][maxIns][cursor2] \
                 if cursor2 in range(len(sents[bagIndex][maxIns])) else 0
 
     return [x, p1, p2, pool_size, context_idx]
+
 
 def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
     numBags = len(rels)
@@ -908,6 +982,7 @@ def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
         pool_size[bagIndex, :] = eposs[bagIndex][maxIns]
 
     return [x, p1, p2, pool_size, y]
+
 
 def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
     numBags = len(rels)
@@ -958,12 +1033,14 @@ def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
         predict_y[bagIndex] = pred_rel_type
     return [predict_y, predict_y_prob, y, significant_eposs, significant_sents]
 
+
 def pre_train_bags_decompose(data_bags):
     bag_sent = [data_bag.sentences for data_bag in data_bags]
     bag_pos = [data_bag.positions for data_bag in data_bags]
     bag_num = [data_bag.num for data_bag in data_bags]
     bag_epos = [data_bag.entitiesPos for data_bag in data_bags]
     return [bag_num, bag_sent, bag_pos, bag_epos]
+
 
 def bags_decompose(data_bags):
     bag_sent = [data_bag.sentences for data_bag in data_bags]
@@ -984,13 +1061,20 @@ def natural_keys(text):
     http://nedbatchelder.com/blog/200712/human_sorting.html
     (See Toothy's implementation in the comments)
     '''
-    return [ atoi(c) for c in re.split('(\d+)', text) ]
+    return [atoi(c) for c in re.split('(\d+)', text)]
 
 
 if __name__ == "__main__":
-    epochs, static, hidden_units_str, max_l, batch_size,\
+    epochs, static, hidden_units_str, max_l, batch_size, \
     window_size, conv_non_linear, dimension, inputdir, \
-    norm, curriculum, for_test, use_pretrain, rnd = parse_argv(sys.argv[1:])
+    norm, curriculum, for_test, pretrain, rnd, \
+    context_size, mode = parse_argv(sys.argv[1:])
+    recent_confg = parse_argv(sys.argv[1:])
+    recent_f = open('recent_config', 'w')
+    for elem in recent_confg:
+        recent_f.write(str(elem))
+        recent_f.write('\n')
+    recent_f.close()
 
     lasagne.random.set_rng(rnd)
     np.random.seed(rnd)
@@ -999,76 +1083,99 @@ if __name__ == "__main__":
     hu_str = hidden_units_str.split('_')
     hidden_units = [int(hu_str[0])]
     activations = []
-    for i in range(1,len(hu_str)-1,2):
+    for i in range(1, len(hu_str) - 1, 2):
         hidden_units.append(int(hu_str[i]))
-        activations.append(hu_str[i+1])
+        activations.append(hu_str[i + 1])
     hidden_units.append(int(hu_str[-1]))
 
     # Read Wv, train, test datasets and save them in the form of python data structure with pickle.
-    if not os.path.isfile(inputdir+'/Wv.p') or for_test:
-        import dataset
+    if not os.path.isfile(inputdir + '/Wv.p') or for_test:
         print '[' + time.asctime(time.localtime()) + '] making wv.p...'
-        dataset.wv2pickle(inputdir+'/wv.txt', dimension,
-                          inputdir+'/Wv.p', for_test=for_test)
+        dataset.wv2pickle(inputdir + '/wv.txt', dimension,
+                          inputdir + '/Wv.p', for_test=for_test)
         print '[' + time.asctime(time.localtime()) + '] making wv.p finished.'
 
-    resultdir = './' + 'C_' + curriculum +'_e_'+str(epochs)+'_s_'+str(static)+'_u_'+\
-                hidden_units_str+'_b_'+str(batch_size)+'_w_'+\
-                str(window_size)+'_c_'+conv_non_linear+'_d_'+\
-                str(dimension)+'_i_'+inputdir+'_n_'+str(norm)
-    if use_pretrain:
-        resultdir += '_pretrain'
+    resultdir = './' + 'C_' + curriculum + '_e_' + str(epochs) + '_s_' + str(static) + '_u_' + \
+                hidden_units_str + '_b_' + str(batch_size) + '_w_' + \
+                str(window_size) + '_c_' + conv_non_linear + '_d_' + \
+                str(dimension) + '_i_' + inputdir + '_n_' + str(norm)
+    if pretrain != 'none':
+        resultdir += '_' + pretrain
 
     print '[' + time.asctime(time.localtime()) + '] load Wv ...'
-    Wv = cPickle.load(open(inputdir+'/Wv.p'))
+    Wv = cPickle.load(open(inputdir + '/Wv.p'))
     print '[' + time.asctime(time.localtime()) + '] loading Wv finished.'
 
-    if (not os.path.isfile('data_figer/train.p') and use_pretrain) or for_test:
-        import dataset
+
+    if pretrain == 'none':
+        pretrain = Pretrain.NONE
+    elif pretrain == 'skipgram':
+        pretrain = Pretrain.SKIPGRAM
+    elif pretrain == 'seq2seq':
+        pretrain = Pretrain.SEQ2SEQ
+
+    if (not os.path.isfile('data_figer/train.p') and pretrain != Pretrain.NONE) or for_test:
         print '[' + time.asctime(time.localtime()) + '] making pre_train.p...'
         dataset.data2pickle('data_figer/train.txt',
                             'data_figer/train.p', for_test, word_size=Wv.shape[0])
         print '[' + time.asctime(time.localtime()) + '] making pre_train.p finished.'
-    if not os.path.isfile(inputdir+'/test.p') or for_test:
-        import dataset
+    if (not os.path.isfile('data_neg_sampling/neg_table_' + inputdir.replace('/', '_') + '.p') and pretrain != Pretrain.NONE) or for_test:
+        print '[' + time.asctime(time.localtime()) + '] making neg_table_' + inputdir.replace('/', '_') + '.p...'
+        table = negsampling.UnigramTable(dict_dir=inputdir)
+        f = open('data_neg_sampling/neg_table_' + inputdir.replace('/', '_') + '.p', 'w')
+        cPickle.dump(table, f, -1)
+        f.close()
+        print '[' + time.asctime(time.localtime()) + '] making neg_table.p finished.'
+    if (not os.path.isfile('data_figer/seq2seq_train.p') and pretrain == Pretrain.SEQ2SEQ) or for_test:
+        print '[' + time.asctime(time.localtime()) + '] making seq2seq_train.p...'
+        dataset.data2pickle_seq2seq('data_figer/train.txt',
+                                    'data_figer/seq2seq_train.p', max_l, Wv.shape[0])
+        print '[' + time.asctime(time.localtime()) + '] making seq2seq_train.p finished.'
+    if not os.path.isfile(inputdir + '/test.p') or for_test:
         print '[' + time.asctime(time.localtime()) + '] making test.p...'
-        dataset.data2pickle(inputdir+'/test.txt',
-                            inputdir+'/test.p', for_test, word_size=Wv.shape[0])
+        dataset.data2pickle(inputdir + '/test.txt',
+                            inputdir + '/test.p', for_test, word_size=Wv.shape[0])
         print '[' + time.asctime(time.localtime()) + '] making test.p finished.'
-    if not os.path.isfile(inputdir+'/train.p') or for_test:
-        import dataset
+    if not os.path.isfile(inputdir + '/train.p') or for_test:
         print '[' + time.asctime(time.localtime()) + '] making train.p...'
-        dataset.data2pickle(inputdir+'/train.txt',
-                            inputdir+'/train.p', for_test, word_size=Wv.shape[0])
+        dataset.data2pickle(inputdir + '/train.txt',
+                            inputdir + '/train.p', for_test, word_size=Wv.shape[0])
         print '[' + time.asctime(time.localtime()) + '] making train.p finished.'
 
-    print '[' + time.asctime(time.localtime()) + '] load pretrain/test/train ...'
-    if use_pretrain:
+    print '[' + time.asctime(time.localtime()) + '] load pretrain/test/train/negTable ...'
+
+    pretrainData = None
+    seq2seqData = None
+    negTable = None
+    if pretrain != Pretrain.NONE:
         pretrainData = cPickle.load(open('data_figer/train.p'))
-    testData = cPickle.load(open(inputdir+'/test.p'))
-    trainData = cPickle.load(open(inputdir+'/train.p'))
-    print '[' + time.asctime(time.localtime()) + '] loading pretrain/test/train finished.'
+        negTable = cPickle.load(open('data_neg_sampling/neg_table_' + inputdir.replace('/', '_') + '.p'))
+    if pretrain == Pretrain.SEQ2SEQ:
+        seq2seqData = cPickle.load(open('data_figer/seq2seq_train.p'))
+    testData = cPickle.load(open(inputdir + '/test.p'))
+    trainData = cPickle.load(open(inputdir + '/train.p'))
+    print '[' + time.asctime(time.localtime()) + '] loading pretrain/test/train/negTable finished.'
     # testData = testData[1:5]
     # trainData = trainData[1:15]
     # tmp = inputdir.split('_')
 
-    if use_pretrain:
-        pretrain = data2cv.make_idx_data_cv(pretrainData, window_size, max_l)
+    if pretrain != Pretrain.NONE:
+        pretrainData = data2cv.make_idx_data_cv(pretrainData, window_size, max_l)
     test = data2cv.make_idx_data_cv(testData, window_size, max_l)
     train = data2cv.make_idx_data_cv(trainData, window_size, max_l)
 
     # Construct position embedding matrices.
     rng = np.random.RandomState(rnd)
     PF1 = np.asarray(rng.uniform(
-        low=-1, high=1, size=[2*max_l - 1, 5]), dtype=theano.config.floatX)
+        low=-1, high=1, size=[2 * max_l - 1, 5]), dtype=theano.config.floatX)
     PF2 = np.asarray(rng.uniform(
-        low=-1, high=1, size=[2*max_l - 1, 5]), dtype=theano.config.floatX)
+        low=-1, high=1, size=[2 * max_l - 1, 5]), dtype=theano.config.floatX)
     conv_layer_W = None
 
     import sys
-    sys.setrecursionlimit(1500)
+    sys.setrecursionlimit(10000)
 
-    if use_pretrain:
+    if pretrain != Pretrain.NONE:
         if not os.path.exists(inputdir + "/pre_trained_data/"):
             os.mkdir(inputdir + "/pre_trained_data/")
         data = os.listdir(inputdir + "/pre_trained_data")
@@ -1077,33 +1184,38 @@ if __name__ == "__main__":
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_8_1683.p", "rb"))
+                open(inputdir + "/pre_trained_data/weights_5_1683.p", "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
-            # [conv_layer_W, Wv, PF1, PF2] = pickle.load(open(inputdir + "/pre_trained_data/" + data[-1], "rb"))
         else:
             print '[' + time.asctime(time.localtime()) + "] pre_train_conv_net started..."
-            conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(pretrain,
-                            test,
-                            Wv,
-                            PF1,
-                            PF2,
+            conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(
+                            train=pretrainData,
+                            test=test,
+                            U=Wv,
+                            PF1=PF1,
+                            PF2=PF2,
+                            seq2seq_train=seq2seqData,
+                            neg_table=negTable,
                             filter_hs=window_size,
                             conv_non_linear=conv_non_linear,
                             hidden_units=hidden_units,
-                            activations_str=activations,
-                            shuffle_batch=True,
-                            epochs=30,
+                            epochs=15,
                             static=static,
-                            directory=resultdir,
-                            inputdir=inputdir,
-                            norm=norm,
                             batch_size=batch_size,
                             img_w=dimension,
+                            norm=norm,
+                            directory=resultdir,
+                            inputdir=inputdir,
+                            activations_str=activations,
                             curriculum=curriculum,
                             for_test=for_test,
                             rnd=rnd,
+                            pretrain=pretrain,
+                            ctx_size=context_size,
+                            mode=mode,
                             )
+
     '''
     print '[' + time.asctime(time.localtime()) + "] calc_atts started..."
     calc_atts(pretrain,
@@ -1113,7 +1225,6 @@ if __name__ == "__main__":
             filter_hs=window_size,
             conv_non_linear=conv_non_linear,
             hidden_units=hidden_units,
-            activations_str=activations,
             shuffle_batch=True,
             epochs=epochs,
             static=static,
@@ -1125,28 +1236,25 @@ if __name__ == "__main__":
             curriculum=curriculum,
             conv_layer_W=conv_layer_W,
             rnd=rnd)
-
     '''
+
     print '[' + time.asctime(time.localtime()) + "] train_conv_net started..."
     train_conv_net(train,
-                    test,
-                    Wv,
-                    PF1,
-                    PF2,
-                    filter_hs=window_size,
-                    conv_non_linear=conv_non_linear,
-                    hidden_units=hidden_units,
-                    activations_str=activations,
-                    shuffle_batch=True,
-                    epochs=epochs,
-
-                    directory=resultdir,
-                    norm=norm,
-                    batch_size=batch_size,
-                    img_w=dimension,
-                    curriculum=curriculum,
-                    conv_layer_W=conv_layer_W,
-                    use_pretrain=use_pretrain,
-                    rnd=rnd
+                   test,
+                   Wv,
+                   PF1,
+                   PF2,
+                   filter_hs=window_size,
+                   conv_non_linear=conv_non_linear,
+                   hidden_units=hidden_units,
+                   activations_str=activations,
+                   shuffle_batch=True,
+                   epochs=epochs,
+                   directory=resultdir,
+                   norm=norm,
+                   batch_size=batch_size,
+                   img_w=dimension,
+                   curriculum=curriculum,
+                   conv_layer_W=conv_layer_W,
+                   rnd=rnd
                    )
-

@@ -466,27 +466,23 @@ class LeNetConvPoolLayer(object):
 
 
 class SkipgramLayer(object):
-    def __init__(self, input, words, batch_size, img_w, for_test, inputdir):
+    def __init__(self, input, words, batch_size, img_w,
+                 for_test, inputdir, ctx_size, neg_table):
         self.input = input
         self.words = words
         self.batch_size = batch_size
         self.img_w = img_w
-        # self.table = negsampling.UnigramTable(dict_dir=inputdir)
+        self.table = neg_table
+        self.ctx_size = ctx_size
         self.for_test = for_test
 
-    def _build_wvs(self, idx):
-        wvs = T.zeros((self.batch_size, self.img_w, 10), dtype=theano.config.floatX)
-        for batch_idx in range(self.batch_size):
-            for c in range(10):
-                wvs = T.set_subtensor(wvs[batch_idx, :, c], self.words[idx[batch_idx][c]])
-        return wvs
-
     def atts(self, context_idx):
-        atts = T.zeros((self.batch_size, 10), dtype=theano.config.floatX)
-        context_wvs = self._build_wvs(context_idx)
+        atts = T.zeros((self.batch_size, 2 + self.ctx_size*4), dtype=theano.config.floatX)
+        context_wvs = self.words[context_idx.flatten()].reshape(
+            (self.batch_size, 2 + self.ctx_size*4, self.img_w)).transpose((0, 2, 1))
         for b in range(self.batch_size):
             total_cos_sim = 0
-            for c in range(10):
+            for c in range(2 + self.ctx_size*4):
                 # if not (c == 2 or c == 7):
                 cos_sim = T.exp(
                     T.dot(self.input[b, :], context_wvs[b, :, c]))
@@ -496,10 +492,11 @@ class SkipgramLayer(object):
         return atts
 
     def cost(self, context_idx, neg_idx, mode):
-        max_batch_size_supported = 10000
+        context_wvs = self.words[context_idx.flatten()].reshape(
+            (self.batch_size, 2 + self.ctx_size*4, self.img_w,)).transpose((0, 2, 1))
+        neg_wvs = self.words[neg_idx.flatten()].reshape(
+            (self.batch_size, (2 + self.ctx_size*4)*10, self.img_w)).transpose((0, 2, 1))
 
-        context_wvs = self._build_wvs(context_idx)
-        neg_wvs = self._build_wvs(neg_idx)
         new_context_wvs = context_wvs
         new_neg_wvs = neg_wvs
 
@@ -513,11 +510,11 @@ class SkipgramLayer(object):
             for b in range(self.batch_size):
                 c_wvs = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim = 0
-                for c in range(10):
-                    if c == 2:
+                for c in range(2 + self.ctx_size*4):
+                    if c == self.ctx_size:  # e1
                         new_context_wvs = \
                             T.set_subtensor(new_context_wvs[b, :, 0], context_wvs[b, :, c])
-                    elif c == 7:
+                    elif c == self.ctx_size*3 + 1:  # e2
                         new_context_wvs = \
                             T.set_subtensor(new_context_wvs[b, :, 1], context_wvs[b, :, c])
                     else:
@@ -533,14 +530,14 @@ class SkipgramLayer(object):
                 total_cos_sim = 0
                 c_wvs2 = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim2 = 0
-                for c in range(10):
-                    if c == 2:
+                for c in range(2 + self.ctx_size*4):
+                    if c == self.ctx_size:  # e1
                         new_context_wvs = \
                             T.set_subtensor(new_context_wvs[b, :, 0], context_wvs[b, :, c])
-                    elif c == 7:
+                    elif c == self.ctx_size*3 + 1:  # e2
                         new_context_wvs = \
                             T.set_subtensor(new_context_wvs[b, :, 1], context_wvs[b, :, c])
-                    elif c < 5:
+                    elif c < self.ctx_size*2 + 1:
                         cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                         total_cos_sim += cos_sim
                         c_wvs += cos_sim * context_wvs[b, :, c]
@@ -558,8 +555,8 @@ class SkipgramLayer(object):
                 total_cos_sim = 0
                 c_wvs2 = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim2 = 0
-                for c in range(10):
-                    if c < 5:
+                for c in range(2 + self.ctx_size*4):
+                    if c < 1 + self.ctx_size*2:
                         cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                         total_cos_sim += cos_sim
                         c_wvs += cos_sim * context_wvs[b, :, c]
@@ -575,7 +572,7 @@ class SkipgramLayer(object):
             for b in range(self.batch_size):
                 c_wvs = numpy.zeros((self.img_w,), dtype=theano.config.floatX)
                 total_cos_sim = 0
-                for c in range(10):
+                for c in range(2 + self.ctx_size*4):
                     cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, c]))
                     total_cos_sim += cos_sim
                     c_wvs += cos_sim * context_wvs[b, :, c]
@@ -583,15 +580,13 @@ class SkipgramLayer(object):
             new_neg_wvs = neg_wvs[:, :, :10]
 
         # Minimize cross-entropy loss function
-        results, updates = theano.scan(lambda context_wv, batch_idx:
-                                       T.log(sigmoid(T.dot(self.input[batch_idx, :], context_wvs[batch_idx, :, :]))),
-                                       outputs_info=None,
-                                       sequences=[new_context_wvs, T.arange(max_batch_size_supported)])
-
-        neg_results, _ = theano.scan(lambda word_idx, batch_idx:
-                                     T.log(sigmoid(-T.dot(self.input[batch_idx, :],
-                                                          neg_wvs[batch_idx, :, :]))),
-                                     outputs_info=None, sequences=[new_neg_wvs, T.arange(max_batch_size_supported)])
+        results, _ = theano.scan(lambda input, context_wv:
+                                 T.log(sigmoid(T.dot(input, context_wv))),
+                                 outputs_info=None,
+                                 sequences=[self.input, new_context_wvs])
+        neg_results, _ = theano.scan(lambda input, neg_wv:
+                                     T.log(sigmoid(-T.dot(input, neg_wv))),
+                                     outputs_info=None, sequences=[self.input, new_neg_wvs])
 
         return -(T.sum(results, dtype=theano.config.floatX) +
                  T.sum(neg_results, dtype=theano.config.floatX))

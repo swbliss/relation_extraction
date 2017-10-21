@@ -5,9 +5,9 @@ e_*
 *.ipynb
 /C_*
 /gap_40_len_80
-/neg_sampling_data
 .*.swp
 /data_*
 /scripts
 /result*
 cp_pcnn.sh
+recent_config
