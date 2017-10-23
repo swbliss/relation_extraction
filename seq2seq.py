@@ -3,7 +3,7 @@ import theano
 import theano.tensor as tensor
 from theano.tensor.nnet.nnet import sigmoid
 
-import utils_seq2seq
+import utils
 import negsampling
 
 
@@ -13,10 +13,10 @@ class LSTM(object):
         self.hidden_size = hidden_size
 
         # lstm W matrixes, Wf, Wi, Wo, Wc respectively, all config.floatX type
-        self.W = theano.shared(name="W", value=utils_seq2seq.init_norm(self.hidden_size, 4 * self.hidden_size),
+        self.W = theano.shared(name="W", value=utils.init_norm(self.hidden_size, 4 * self.hidden_size),
                                borrow=True)
         # lstm U matrixes, Uf, Ui, Uo, Uc respectively, all config.floatX type
-        self.U = theano.shared(name="U", value=utils_seq2seq.init_norm(self.hidden_size, 4 * self.hidden_size),
+        self.U = theano.shared(name="U", value=utils.init_norm(self.hidden_size, 4 * self.hidden_size),
                                borrow=True)
         # lstm b vectors, bf, bi, bo, bc respectively, all config.floatX type
         self.b = theano.shared(name="b", value=np.zeros(4 * self.hidden_size, dtype=theano.config.floatX), borrow=True)

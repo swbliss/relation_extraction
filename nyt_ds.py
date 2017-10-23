@@ -22,6 +22,7 @@ class Pretrain(Enum):
     NONE = 0
     SKIPGRAM = 1
     SEQ2SEQ = 2
+    DEPSP = 3
 
 def parse_argv(argv):
     opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:n:C:tp:r:S:m:",
@@ -186,7 +187,8 @@ def pre_train_conv_net(train,
                        U,
                        PF1,
                        PF2,
-                       seq2seq_train,
+                       seq2seq_data,
+                       dep_sp_data,
                        neg_table,
                        filter_hs=3,
                        conv_non_linear="tanh",
@@ -234,8 +236,12 @@ def pre_train_conv_net(train,
     p2 = T.imatrix('pf2')
     pool_size = T.imatrix('pos')
     context = T.imatrix('context')
-    neg = T.imatrix('neg') if pretrain==Pretrain.SKIPGRAM else T.itensor3('neg')
+    context_msk = T.imatrix('context_msk')
     di, dm, dt = T.imatrices(3)  # decoderInput, decoderMast, decoderTarget
+    if pretrain == Pretrain.SEQ2SEQ:
+        neg = T.itensor3('neg')
+    else:
+        neg = T.imatrix('neg')
 
     Words = theano.shared(value=U, name="Words")
     PF1W = theano.shared(value=PF1, name="pf1w")
@@ -268,16 +274,19 @@ def pre_train_conv_net(train,
     layer1_input = conv_layer.output.flatten(2)
 
     assert(pretrain != Pretrain.NONE)
-    if pretrain == Pretrain.SKIPGRAM:   # Pre-training using skip-gram
-        output_layer = SkipgramLayer(
-            input=layer1_input, words=Words, batch_size=batch_size,img_w=img_w,
-            for_test=for_test, inputdir=inputdir, ctx_size=ctx_size, neg_table=neg_table)
-        cost = output_layer.cost(context_idx=context, neg_idx=neg, mode=mode)
-    else:   # Pre-training using seq2seq
+    if pretrain == Pretrain.SEQ2SEQ:
         output_layer = Seq2Seq(words=Words, input=layer1_input, voca_size=U.shape[0],
                                hidden_size=U.shape[1], max_l=max_l, batch_size=batch_size,
                                neg_num=10, lstm_layers_num=1, inputdir=inputdir, neg_table=neg_table)
         cost = output_layer.cost(di, dm, dt, neg)
+    else:
+        output_layer = SkipgramLayer(
+            input=layer1_input, words=Words, batch_size=batch_size,img_w=img_w,
+            for_test=for_test, inputdir=inputdir, ctx_size=ctx_size, max_l=max_l, neg_table=neg_table)
+        if pretrain == Pretrain.SKIPGRAM:
+            cost = output_layer.cost_skipgram(context_idx=context, neg_idx=neg, mode=mode)
+        elif pretrain == Pretrain.DEPSP:
+            cost = output_layer.cost_depsp(context_idx=context, context_msk=context_msk, neg_idx=neg)
 
     if not static:  # if word vectors are allowed to change, add them as model parameters
         params += [Words]
@@ -308,8 +317,9 @@ def pre_train_conv_net(train,
 
     new_decoder_inputs = None
     new_decoder_targets = None
+    new_dep_sp_ctx = None
     if pretrain == Pretrain.SEQ2SEQ:
-        decoder_inputs, decoder_targets = seq2seq_train
+        decoder_inputs, decoder_targets = seq2seq_data
         if len(decoder_inputs) % batch_size > 0:
             extra_data = decoder_inputs[:, :extra_data_num]
             decoder_inputs = np.append(decoder_inputs, extra_data, axis=1)
@@ -329,12 +339,20 @@ def pre_train_conv_net(train,
             new_decoder_inputs[:, n_train_batches // 10 * batch_size:]
         new_decoder_targets = \
             new_decoder_targets[:, n_train_batches // 10 * batch_size:]
-    else:
+    elif pretrain == Pretrain.DEPSP:
+        if len(dep_sp_data) % batch_size > 0:
+            extra_data = dep_sp_data[:extra_data_num, :]
+            dep_sp_ctx = np.append(dep_sp_data, extra_data, axis=0)
+        tmp = list(zip(train, dep_sp_ctx))
+        np.random.shuffle(tmp)
+        new_train, new_dep_sp_ctx = map(lambda x: np.array(x), zip(*tmp))
+        valid_dep_sp_ctx = new_dep_sp_ctx[:n_train_batches // 10 * batch_size]
+        new_dep_sp_ctx = new_dep_sp_ctx[n_train_batches // 10 * batch_size:]
+    else:   # Pretrain.SKIPGRAM
         new_train = np.random.permutation(train)
 
-    n_valid = n_train_batches // 10 * batch_size   # batch number of valid data
-    new_valid = new_train[:n_valid]
-    new_train = new_train[n_valid:]
+    new_valid = new_train[:n_train_batches // 10 * batch_size]
+    new_train = new_train[n_train_batches // 10 * batch_size:]
     n_train_batches = new_train.shape[0]/batch_size
     n_valid_batches = new_valid.shape[0]/batch_size
     # # TODO: change this part to apply curriculum learning
@@ -344,6 +362,8 @@ def pre_train_conv_net(train,
     [train_nums, train_sents, train_poss, train_eposs] = pre_train_bags_decompose(new_train)
     if pretrain == Pretrain.SKIPGRAM:
         train_model_batch = theano.function([x, p1, p2, pool_size, context, neg], cost, updates=grad_updates)
+    elif pretrain == Pretrain.DEPSP:
+        train_model_batch = theano.function([x, p1, p2, pool_size, context, context_msk, neg], cost, updates=grad_updates)
     else:
         train_model_batch = theano.function([x, p1, p2, pool_size, di, dm, dt, neg], cost, updates=grad_updates, on_unused_input='ignore')
 
@@ -363,6 +383,7 @@ def pre_train_conv_net(train,
                 if train_batch_idx % 400 == 0:
                     print(" [" + time.asctime(time.localtime(time.time())) +
                           "] " + str(train_batch_idx))
+
                 if train_batch_idx == n_train_batches - 1:
                     print("#pre_training result saving: " +
                           str(train_batch_idx) + " [" +
@@ -375,23 +396,33 @@ def pre_train_conv_net(train,
                     print("#pre_training result saving finished: " +
                           str(train_batch_idx) + " [" +
                           time.asctime(time.localtime(time.time())) + "]")
+
                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
                 x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(
                     inst_indices, train_nums, train_sents, train_poss,
                     train_eposs, img_h, ctx_size)
 
-                if pretrain == Pretrain.SKIPGRAM:
-                    neg_num = context_idx.shape[1] * 10
-                    neg_idx = np.asarray(output_layer.table.sample(batch_size * neg_num, for_test), dtype='int32') \
-                        .reshape((batch_size, neg_num))
-                    cost = train_model_batch(x, p1, p2, pool_size, context_idx, neg_idx)
-                else:
+                if pretrain == Pretrain.SEQ2SEQ:
                     deIpt = new_decoder_inputs[:, inst_indices]
                     deTgt = new_decoder_targets[:, inst_indices]
-                    deMst = utils_seq2seq.get_mask(deIpt)
+                    deMst = utils.get_mask(deIpt)
                     neg_idx = np.asarray(output_layer.table.sample(deIpt.shape[0]*batch_size*10, for_test), dtype='int32')\
                         .reshape((deIpt.shape[0], batch_size, 10))
                     cost = train_model_batch(x, p1, p2, pool_size, deIpt, deMst, deTgt, neg_idx)
+                else:
+                    if pretrain == Pretrain.DEPSP:
+                        context_idx = np.asarray(
+                            [new_dep_sp_ctx[m] for m in inst_indices],
+                            dtype='int32')
+                        context_msk = utils.get_mask(context_idx)
+                    neg_num = context_idx.shape[1] * 10
+                    neg_idx = np.asarray(output_layer.table.sample(batch_size * neg_num, for_test), dtype='int32') \
+                        .reshape((batch_size, neg_num))
+                    if pretrain == Pretrain.SKIPGRAM:
+                        cost = train_model_batch(x, p1, p2, pool_size, context_idx, neg_idx)
+                    else:
+                        cost = train_model_batch(x, p1, p2, pool_size, context_idx, context_msk, neg_idx)
+
 
                 cost_f.write(str((epoch * n_train_batches) + train_batch_idx) +
                              " " + str(cost) + "\n")
@@ -1069,6 +1100,7 @@ if __name__ == "__main__":
     window_size, conv_non_linear, dimension, inputdir, \
     norm, curriculum, for_test, pretrain, rnd, \
     context_size, mode = parse_argv(sys.argv[1:])
+
     recent_confg = parse_argv(sys.argv[1:])
     recent_f = open('recent_config', 'w')
     for elem in recent_confg:
@@ -1113,6 +1145,8 @@ if __name__ == "__main__":
         pretrain = Pretrain.SKIPGRAM
     elif pretrain == 'seq2seq':
         pretrain = Pretrain.SEQ2SEQ
+    elif pretrain == 'depsp':
+        pretrain = Pretrain.DEPSP
 
     if (not os.path.isfile('data_figer/train.p') and pretrain != Pretrain.NONE) or for_test:
         print '[' + time.asctime(time.localtime()) + '] making pre_train.p...'
@@ -1131,6 +1165,11 @@ if __name__ == "__main__":
         dataset.data2pickle_seq2seq('data_figer/train.txt',
                                     'data_figer/seq2seq_train.p', max_l, Wv.shape[0])
         print '[' + time.asctime(time.localtime()) + '] making seq2seq_train.p finished.'
+    if (not os.path.isfile('data_figer/dep_sp.p') and pretrain == Pretrain.DEPSP) or for_test:
+        print '[' + time.asctime(time.localtime()) + '] making dep_sp.p...'
+        dataset.data2pickle('data_figer/dep_sp.txt', 'data_figer/dep_sp.p',
+                            for_test, for_dep_sp=True, max_l=max_l)
+        print '[' + time.asctime(time.localtime()) + '] making dep_sp.p finished.'
     if not os.path.isfile(inputdir + '/test.p') or for_test:
         print '[' + time.asctime(time.localtime()) + '] making test.p...'
         dataset.data2pickle(inputdir + '/test.txt',
@@ -1142,19 +1181,24 @@ if __name__ == "__main__":
                             inputdir + '/train.p', for_test, word_size=Wv.shape[0])
         print '[' + time.asctime(time.localtime()) + '] making train.p finished.'
 
-    print '[' + time.asctime(time.localtime()) + '] load pretrain/test/train/negTable ...'
+    print '[' + time.asctime(time.localtime()) + \
+          '] load pretrain/test/train/negTable data...'
 
     pretrainData = None
     seq2seqData = None
+    depspData = None
     negTable = None
     if pretrain != Pretrain.NONE:
         pretrainData = cPickle.load(open('data_figer/train.p'))
         negTable = cPickle.load(open('data_neg_sampling/neg_table_' + inputdir.replace('/', '_') + '.p'))
     if pretrain == Pretrain.SEQ2SEQ:
         seq2seqData = cPickle.load(open('data_figer/seq2seq_train.p'))
+    if pretrain == Pretrain.DEPSP:
+        depspData = cPickle.load(open('data_figer/dep_sp.p'))
     testData = cPickle.load(open(inputdir + '/test.p'))
     trainData = cPickle.load(open(inputdir + '/train.p'))
-    print '[' + time.asctime(time.localtime()) + '] loading pretrain/test/train/negTable finished.'
+    print '[' + time.asctime(time.localtime()) + \
+          '] loading pretrain/test/train/negTable data finished.'
     # testData = testData[1:5]
     # trainData = trainData[1:15]
     # tmp = inputdir.split('_')
@@ -1195,7 +1239,8 @@ if __name__ == "__main__":
                             U=Wv,
                             PF1=PF1,
                             PF2=PF2,
-                            seq2seq_train=seq2seqData,
+                            seq2seq_data=seq2seqData,
+                            dep_sp_data=depspData,
                             neg_table=negTable,
                             filter_hs=window_size,
                             conv_non_linear=conv_non_linear,

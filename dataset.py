@@ -3,7 +3,7 @@ import cPickle
 import numpy as np
 import theano
 
-import utils_seq2seq
+import utils
 
 
 class InstanceBag(object):
@@ -22,12 +22,12 @@ def replace_unknown_words(x, word_size):
         x[i] = -1 if x[i] >= word_size else x[i]
 
 
-def readData(filename, for_test, word_size):
+def readData(filename, for_test, word_size, for_dep_sp, max_l):
     f = open(filename, 'r')
     data = []
 
     bag_num = 0
-    while 1:
+    while True:
         line = f.readline()
         if not line:
             break
@@ -40,28 +40,37 @@ def readData(filename, for_test, word_size):
 
         rel = map(int, bagLabel[0:-1])
         num = int(bagLabel[-1])
-        positions = []
-        sentences = []
-        entitiesPos = []
-        for i in range(0, num):
-            sent = f.readline().split(' ')
-            positions.append(map(int, sent[0:2]))
-            epos = map(int, sent[0:2])
-            epos.sort()
-            entitiesPos.append(epos)
-            sent_example = map(int, sent[2:])
-            if for_test:
-                replace_unknown_words(sent_example, word_size)
-            sentences.append(sent_example)
-        ins = InstanceBag(entities, rel, num, sentences, positions, entitiesPos)
-        data += [ins]
 
-        if for_test and bag_num >= 500:
-            break
+        if not for_dep_sp:
+            positions = []
+            sentences = []
+            entitiesPos = []
+            for i in range(0, num):
+                sent = f.readline().split(' ')
+                positions.append(map(int, sent[0:2]))
+                epos = map(int, sent[0:2])
+                epos.sort()
+                entitiesPos.append(epos)
+                sent_example = map(int, sent[2:])
+                if for_test:
+                    replace_unknown_words(sent_example, word_size)
+                sentences.append(sent_example)
+            ins = InstanceBag(entities, rel, num, sentences, positions, entitiesPos)
+            data += [ins]
+
+            if for_test and bag_num >= 500:
+                break
+            else:
+                bag_num += 1
         else:
-            bag_num += 1
+            sp_words = list(map(int, f.readline().strip().split(' ')))
+            while len(sp_words) < max_l:
+                sp_words = np.append(sp_words, 0)
+            data.append(np.asarray(sp_words, dtype='int32'))
+            for _ in range(num - 1):
+                f.readline()
     f.close()
-    return data
+    return np.asarray(data)
 
 
 def wv2pickle(filename='wv.txt', dim=50, outfile='Wv.p', for_test=False):
@@ -89,15 +98,15 @@ def wv2pickle(filename='wv.txt', dim=50, outfile='Wv.p', for_test=False):
     f.close()
 
 
-def data2pickle(input, output, for_test, word_size=1000000):
-    data = readData(input, for_test, word_size)
+def data2pickle(input, output, for_test,
+                word_size=1000000, for_dep_sp=False, max_l=80):
+    data = readData(input, for_test, word_size, for_dep_sp, max_l)
     f = open(output, 'w')
     cPickle.dump(data, f, -1)
     f.close()
 
-
 def data2pickle_seq2seq(input, output, max_l, word_size):
-    data = utils_seq2seq.load_train_data(input, max_l, word_size)
+    data = utils.load_train_data(input, max_l, word_size)
     f = open(output, 'w')
     cPickle.dump(data, f, -1)
     f.close()

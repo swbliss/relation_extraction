@@ -467,13 +467,14 @@ class LeNetConvPoolLayer(object):
 
 class SkipgramLayer(object):
     def __init__(self, input, words, batch_size, img_w,
-                 for_test, inputdir, ctx_size, neg_table):
+                 for_test, inputdir, ctx_size, max_l, neg_table):
         self.input = input
         self.words = words
         self.batch_size = batch_size
         self.img_w = img_w
         self.table = neg_table
         self.ctx_size = ctx_size
+        self.max_l = max_l
         self.for_test = for_test
 
     def atts(self, context_idx):
@@ -491,7 +492,7 @@ class SkipgramLayer(object):
             atts = T.set_subtensor(atts[b, :], atts[b, :] / total_cos_sim)
         return atts
 
-    def cost(self, context_idx, neg_idx, mode):
+    def cost_skipgram(self, context_idx, neg_idx, mode):
         context_wvs = self.words[context_idx.flatten()].reshape(
             (self.batch_size, 2 + self.ctx_size*4, self.img_w,)).transpose((0, 2, 1))
         neg_wvs = self.words[neg_idx.flatten()].reshape(
@@ -505,6 +506,9 @@ class SkipgramLayer(object):
         # mode 2: e1, e2, context_words_att(e1), context_words_att(e2)
         # mode 3: e1_context_words_att, e2_context_words_att
         # mode 4: context_words_att(all)
+        if mode != 0:
+            assert(self.ctx_size != 0)
+
         if mode == 1:
             new_context_wvs = T.zeros_like(context_wvs[:, :, :3], dtype=theano.config.floatX)
             for b in range(self.batch_size):
@@ -590,3 +594,28 @@ class SkipgramLayer(object):
 
         return -(T.sum(results, dtype=theano.config.floatX) +
                  T.sum(neg_results, dtype=theano.config.floatX))
+
+
+    def cost_depsp(self, context_idx, context_msk, neg_idx):
+        # context_idx: (B, S)
+        # context_wvs: (B, H, S)
+        context_wvs = self.words[context_idx.flatten()].reshape(
+            (self.batch_size, self.max_l, self.img_w)).transpose((0, 2, 1))
+        neg_wvs = self.words[neg_idx.flatten()].reshape(
+            (self.batch_size, self.max_l*10, self.img_w)).transpose((0, 2, 1))
+
+        neg_msk = context_msk.repeat(10, axis=1)
+
+        # Minimize cross-entropy loss function
+        results, _ = theano.scan(lambda input, context_wv, mask:
+                                 T.log(sigmoid(T.dot(input, context_wv)))*mask,
+                                 outputs_info=None,
+                                 sequences=[self.input, context_wvs, context_msk])
+        neg_results, _ = theano.scan(lambda input, neg_wv, mask:
+                                     T.log(sigmoid(-T.dot(input, neg_wv)))*mask,
+                                     outputs_info=None,
+                                     sequences=[self.input, neg_wvs, neg_msk])
+
+        return -(T.sum(results, dtype=theano.config.floatX) +
+                 T.sum(neg_results, dtype=theano.config.floatX)
+                 ) / T.sum(context_msk)
