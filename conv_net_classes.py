@@ -467,7 +467,7 @@ class LeNetConvPoolLayer(object):
 
 class SkipgramLayer(object):
     def __init__(self, input, words, batch_size, img_w,
-                 for_test, inputdir, ctx_size, max_l, neg_table):
+                 for_test, ctx_size, max_l, neg_table):
         self.input = input
         self.words = words
         self.batch_size = batch_size

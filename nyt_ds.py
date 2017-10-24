@@ -25,25 +25,26 @@ class Pretrain(Enum):
     DEPSP = 3
 
 def parse_argv(argv):
-    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:n:C:tp:r:S:m:",
+    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:C:tp:o:L:r:S:m:",
                                ['epoch', 'static', 'hidden_units',
                                 'batch_size', 'window', 'active_function',
-                                'dimension', 'inputdir', 'norm', 'curriculum',
+                                'dimension', 'inputdir', 'curriculum',
                                 'test', 'pretrain', 'rnd',])
-    epochs = 30
+    epochs = 15
     static = False
-    hidden_units_str = '100_51'
+    hidden_units_str = '100_10'
     max_l = 80
     batch_size = 50
     window_size = 3
     conv_non_linear = 'tanh'  # active fuction
-    dimension = 50
-    inputdir = './'
-    norm = 0
+    dimension = 300
+    inputdir = 'data_sem_eval'
     curriculum = 'none'
     for_test = False
     pretrain = 'none'
     rnd = 3435
+    optimizer = 'adagrad'
+    lr = '0.05'
     context_size = 2
     mode = 0
     for op, value in opts:
@@ -65,8 +66,6 @@ def parse_argv(argv):
             dimension = int(value)
         elif op == '-i':
             inputdir = value
-        elif op == '-n':
-            norm = int(value)
         elif op == '-C':
             curriculum = value
         elif op == '-t':
@@ -75,6 +74,10 @@ def parse_argv(argv):
             pretrain = value
         elif op == '-r':
             rnd = int(value)
+        elif op == '-o':
+            optimizer = value
+        elif op == '-L':
+            lr = float(value)
         elif op == '-S':
             context_size = int(value)
         elif op == '-m':
@@ -85,7 +88,7 @@ def parse_argv(argv):
             sys.exit()
     return [epochs, static, hidden_units_str, max_l,
             batch_size, window_size, conv_non_linear, dimension,
-            inputdir, norm, curriculum, for_test, pretrain, rnd,
+            inputdir, curriculum, for_test, pretrain, rnd, optimizer, lr,
             context_size, mode]
 
 
@@ -102,44 +105,6 @@ def my_updates(params):
     updates = OrderedDict({})
     for param in params:
         updates[param] = param + 1
-    return updates
-
-
-def sgd_updates_adadelta(norm, params, cost, rho=0.95, epsilon=1e-6, norm_lim=9, word_vec_name='Words'):
-    """
-    adadelta update rule, mostly from
-    https://groups.google.com/forum/#!topic/pylearn-dev/3QbKtCumAW4 (for Adadelta)
-    """
-    updates = OrderedDict({})
-    exp_sqr_grads = OrderedDict({})
-    exp_sqr_ups = OrderedDict({})
-    gparams = []
-    for param in params:
-        empty = np.zeros_like(param.get_value())
-        exp_sqr_grads[param] = theano.shared(value=as_floatX(empty), name="exp_grad_%s" % param.name)
-        gp = T.grad(cost, param)
-        exp_sqr_ups[param] = theano.shared(value=as_floatX(empty), name="exp_grad_%s" % param.name)
-        gparams.append(gp)
-    for param, gp in zip(params, gparams):
-        exp_sg = exp_sqr_grads[param]
-        exp_su = exp_sqr_ups[param]
-        up_exp_sg = rho * exp_sg + (1 - rho) * T.sqr(gp)
-        updates[exp_sg] = up_exp_sg
-        step = -(T.sqrt(exp_su + epsilon) / T.sqrt(up_exp_sg + epsilon)) * gp
-        updates[exp_su] = rho * exp_su + (1 - rho) * T.sqr(step)
-        stepped_param = param + step
-        if norm == 1:
-            if (param.get_value(borrow=True).ndim == 2) and param.name != 'Words':
-                col_norms = T.sqrt(T.sum(T.sqr(stepped_param), axis=0))
-                desired_norms = T.clip(col_norms, 0, T.sqrt(norm_lim))
-                scale = desired_norms / (1e-7 + col_norms)
-                updates[param] = stepped_param * scale
-            else:
-                updates[param] = stepped_param
-        elif norm == 0:
-            updates[param] = stepped_param
-        else:
-            updates[param] = stepped_param
     return updates
 
 
@@ -201,15 +166,15 @@ def pre_train_conv_net(train,
                        batch_size=50,
                        img_w=50,
                        pf_dim=5,
-                       norm=0,
                        dropout_rate=[0.5],
                        directory='./',
-                       inputdir='./',
                        activations_str=[],
                        borrow=True,
                        curriculum="none",
                        for_test=False,
                        rnd=3435,
+                       optimizer='adagrad',
+                       lr=0.05,
                        pretrain='skipgram',
                        ctx_size=2,
                        mode=0,):
@@ -277,12 +242,12 @@ def pre_train_conv_net(train,
     if pretrain == Pretrain.SEQ2SEQ:
         output_layer = Seq2Seq(words=Words, input=layer1_input, voca_size=U.shape[0],
                                hidden_size=U.shape[1], max_l=max_l, batch_size=batch_size,
-                               neg_num=10, lstm_layers_num=1, inputdir=inputdir, neg_table=neg_table)
+                               neg_num=10, lstm_layers_num=1, neg_table=neg_table)
         cost = output_layer.cost(di, dm, dt, neg)
     else:
         output_layer = SkipgramLayer(
             input=layer1_input, words=Words, batch_size=batch_size,img_w=img_w,
-            for_test=for_test, inputdir=inputdir, ctx_size=ctx_size, max_l=max_l, neg_table=neg_table)
+            for_test=for_test, ctx_size=ctx_size, max_l=max_l, neg_table=neg_table)
         if pretrain == Pretrain.SKIPGRAM:
             cost = output_layer.cost_skipgram(context_idx=context, neg_idx=neg, mode=mode)
         elif pretrain == Pretrain.DEPSP:
@@ -294,9 +259,14 @@ def pre_train_conv_net(train,
     params += [PF2W]
 
     cost += L2_norm(params)
-    grad_updates = adagrad(cost, params, learning_rate=0.05)
+    if optimizer == 'adagrad':
+        grad_updates = adagrad(cost, params, learning_rate=lr)
+    elif optimizer == 'adadelta':
+        grad_updates = adadelta(cost, params, learning_rate=lr, rho=lr_decay)
+    else:
+        print("optimizer should be adagrad / adadelta")
+        raise AssertionError
     # grad_updates = sgd(cost, params, 1e-6)
-    # grad_updates = adadelta(cost, params, rho=lr_decay)
 
     print "--------[5]--------"
 
@@ -376,7 +346,7 @@ def pre_train_conv_net(train,
 
     while (epoch < epochs):
         cost_f = open(
-            inputdir + "/pre_trained_data/cost_log_epoch_" + str(epoch), "w")
+            directory + "/pre_trained_data/cost_log_epoch_" + str(epoch), "w")
         print("\n### epoch " + str(epoch) + " ###")
         if curriculum == "none":
             for train_batch_idx in range(n_train_batches):
@@ -384,13 +354,14 @@ def pre_train_conv_net(train,
                     print(" [" + time.asctime(time.localtime(time.time())) +
                           "] " + str(train_batch_idx))
 
-                if train_batch_idx == n_train_batches - 1:
+                if train_batch_idx == n_train_batches - 1 \
+                        and epoch > epochs - 4:
                     print("#pre_training result saving: " +
                           str(train_batch_idx) + " [" +
                           time.asctime(time.localtime(time.time())) + "]")
                     pickle.dump([conv_layer.W.get_value(), Words.get_value(),
                                  PF1W.get_value(), PF2W.get_value()],
-                                open(inputdir + "/pre_trained_data/weights_" +
+                                open(directory + "/pre_trained_data/weights_" +
                                      str(epoch) + "_" + str(train_batch_idx) +
                                      ".p", "wb"))
                     print("#pre_training result saving finished: " +
@@ -452,7 +423,6 @@ def train_conv_net(train,
                    batch_size=50,
                    img_w=50,
                    pf_dim=5,
-                   norm=0,
                    dropout_rate=[0.5],
                    directory='./',
                    activations_str=[],
@@ -613,7 +583,6 @@ def train_conv_net(train,
         dropout_cost += L2_norm(params)
         grad_updates = adagrad(dropout_cost, params, learning_rate=0.05)
         # grad_updates = adadelta(dropout_cost, params, rho=lr_decay)
-        # grad_updates = sgd_updates_adadelta(norm, params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
         # grad_updates = sgd(dropout_cost, params, 1e-3)
         # grad_updates = my_updates(params)
         train_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost, updates=grad_updates, )
@@ -689,7 +658,7 @@ def train_conv_net(train,
             p = test_pr[0][-1]
             r = test_pr[1][-1]
 
-            dir_batch = directory + "_batches_" + str(n_batches) + "/"
+            dir_batch = directory + "/batches_" + str(n_batches) + "/"
 
             if not os.path.exists(dir_batch):
                 os.mkdir(dir_batch)
@@ -716,7 +685,6 @@ def calc_atts(train,
               batch_size=50,
               img_w=50,
               pf_dim=5,
-              norm=0,
               dropout_rate=[0.5],
               directory='./',
               inputdir='./',
@@ -1098,7 +1066,7 @@ def natural_keys(text):
 if __name__ == "__main__":
     epochs, static, hidden_units_str, max_l, batch_size, \
     window_size, conv_non_linear, dimension, inputdir, \
-    norm, curriculum, for_test, pretrain, rnd, \
+    curriculum, for_test, pretrain, rnd, optimizer, lr,\
     context_size, mode = parse_argv(sys.argv[1:])
 
     recent_confg = parse_argv(sys.argv[1:])
@@ -1127,12 +1095,27 @@ if __name__ == "__main__":
                           inputdir + '/Wv.p', for_test=for_test)
         print '[' + time.asctime(time.localtime()) + '] making wv.p finished.'
 
-    resultdir = './' + 'C_' + curriculum + '_e_' + str(epochs) + '_s_' + str(static) + '_u_' + \
-                hidden_units_str + '_b_' + str(batch_size) + '_w_' + \
-                str(window_size) + '_c_' + conv_non_linear + '_d_' + \
-                str(dimension) + '_i_' + inputdir + '_n_' + str(norm)
+    # change result dir name as you want
+    resultdir = './results_sem_eval/' + str(pretrain) + '_r_' + str(rnd) + '_opt_' + \
+                str(optimizer) + '_lr_' + str(lr).replace('.', '')
     if pretrain != 'none':
-        resultdir += '_' + pretrain
+        resultdir += '_m_' + str(mode)
+    if pretrain == 'skipgram':
+        resultdir += '_c_' + str(context_size)
+
+    if not os.path.exists(resultdir):
+        os.mkdir(resultdir)
+        print 'saving results at ' + resultdir + '...'
+    else:
+        print(resultdir + " already exists!")
+        raise AssertionError
+
+    # resultdir = './' + 'C_' + curriculum + '_e_' + str(epochs) + '_s_' + str(static) + '_u_' + \
+    #             hidden_units_str + '_b_' + str(batch_size) + '_w_' + \
+    #             str(window_size) + '_c_' + conv_non_linear + '_d_' + \
+    #             str(dimension) + '_i_' + inputdir
+    # if pretrain != 'none':
+    #     resultdir += '_' + pretrain
 
     print '[' + time.asctime(time.localtime()) + '] load Wv ...'
     Wv = cPickle.load(open(inputdir + '/Wv.p'))
@@ -1220,15 +1203,15 @@ if __name__ == "__main__":
     sys.setrecursionlimit(10000)
 
     if pretrain != Pretrain.NONE:
-        if not os.path.exists(inputdir + "/pre_trained_data/"):
-            os.mkdir(inputdir + "/pre_trained_data/")
-        data = os.listdir(inputdir + "/pre_trained_data")
+        if not os.path.exists(resultdir + "/pre_trained_data/"):
+            os.mkdir(resultdir + "/pre_trained_data/")
+        data = os.listdir(resultdir + "/pre_trained_data")
         if len(data) != 0:
             data.sort(key=natural_keys)
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
             [conv_layer_W, Wv, PF1, PF2] = pickle.load(
-                open(inputdir + "/pre_trained_data/weights_5_1683.p", "rb"))
+                open(resultdir + "/pre_trained_data/" + str(data[-1]), "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
         else:
@@ -1245,17 +1228,17 @@ if __name__ == "__main__":
                             filter_hs=window_size,
                             conv_non_linear=conv_non_linear,
                             hidden_units=hidden_units,
-                            epochs=15,
+                            epochs=epochs,
                             static=static,
                             batch_size=batch_size,
                             img_w=dimension,
-                            norm=norm,
                             directory=resultdir,
-                            inputdir=inputdir,
                             activations_str=activations,
                             curriculum=curriculum,
                             for_test=for_test,
                             rnd=rnd,
+                            optimizer=optimizer,
+                            lr=lr,
                             pretrain=pretrain,
                             ctx_size=context_size,
                             mode=mode,
@@ -1275,7 +1258,6 @@ if __name__ == "__main__":
             static=static,
             directory=resultdir,
             inputdir=inputdir,
-            norm=norm,
             batch_size=batch_size,
             img_w=dimension,
             curriculum=curriculum,
@@ -1294,9 +1276,8 @@ if __name__ == "__main__":
                    hidden_units=hidden_units,
                    activations_str=activations,
                    shuffle_batch=True,
-                   epochs=epochs,
+                   epochs=15,
                    directory=resultdir,
-                   norm=norm,
                    batch_size=batch_size,
                    img_w=dimension,
                    curriculum=curriculum,

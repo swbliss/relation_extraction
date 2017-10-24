@@ -11,3 +11,6 @@ e_*
 /result*
 cp_pcnn.sh
 recent_config
+/tuning_logs
+/nyt_NRE_results
+/old_results_sem_eval

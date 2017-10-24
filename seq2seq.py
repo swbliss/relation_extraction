@@ -73,7 +73,7 @@ class LSTM(object):
 
 class Seq2Seq(object):
     def __init__(self, words, input, voca_size, hidden_size, max_l, batch_size,
-                 neg_num, lstm_layers_num, inputdir, neg_table, learning_rate=0.2, ):
+                 neg_num, lstm_layers_num, neg_table, learning_rate=0.2, ):
         self.words = words
         self.input = input
         self.voca_size = voca_size
