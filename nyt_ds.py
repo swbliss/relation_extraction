@@ -649,8 +649,13 @@ def train_conv_net(train,
                             prev_valid_cost = valid_cost
                             wait_until_decrease = 0
 
-            test_predict = predict_relation(test_rels, test_nums, test_sents, test_poss, test_eposs, test_one, img_h)
-            test_pr = positive_evaluation(test_predict)
+            # TODO: change this part for {validation | test}
+            valid_predict = predict_relation(valid_rels, valid_nums, valid_sents,
+                                            valid_poss, valid_eposs, test_one, img_h)
+            test_pr = positive_evaluation(valid_predict)
+
+            # test_predict = predict_relation(test_rels, test_nums, test_sents, test_poss, test_eposs, test_one, img_h)
+            # test_pr = positive_evaluation(test_predict)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             print str(now) + '\t epoch ' + str(epoch) + ' test set PR = [' + str(test_pr[0][-1]) + ' ' + str(
                 test_pr[1][-1]) + ']'
@@ -1094,6 +1099,9 @@ if __name__ == "__main__":
         dataset.wv2pickle(inputdir + '/wv.txt', dimension,
                           inputdir + '/Wv.p', for_test=for_test)
         print '[' + time.asctime(time.localtime()) + '] making wv.p finished.'
+
+    if not os.path.exists('./results_sem_eval/'):
+        os.mkdir('./results_sem_eval/')
 
     # change result dir name as you want
     resultdir = './results_sem_eval/' + str(pretrain) + '_r_' + str(rnd) + '_opt_' + \
