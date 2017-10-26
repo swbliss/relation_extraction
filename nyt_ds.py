@@ -107,6 +107,12 @@ def my_updates(params):
         updates[param] = param + 1
     return updates
 
+def L1_norm(params):
+    L1 = 0
+    ld = 1e-6
+    for param in params:
+        L1 += ld * abs(param)
+    return L1
 
 def L2_norm(params):
     L2 = 0
