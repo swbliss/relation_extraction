@@ -596,25 +596,43 @@ class SkipgramLayer(object):
                  T.sum(neg_results, dtype=theano.config.floatX))
 
 
-    def cost_depsp(self, context_idx, context_msk, neg_idx):
+    def cost_depsp(self, context_idx, context_msk, neg_idx, mode):
         # context_idx: (B, S)
         # context_wvs: (B, H, S)
         context_wvs = self.words[context_idx.flatten()].reshape(
             (self.batch_size, self.max_l, self.img_w)).transpose((0, 2, 1))
         neg_wvs = self.words[neg_idx.flatten()].reshape(
             (self.batch_size, self.max_l*10, self.img_w)).transpose((0, 2, 1))
+        new_context_wvs = context_wvs
+        new_context_msk = context_msk
+        new_neg_wvs = neg_wvs
+        new_neg_msk = context_msk.repeat(10, axis=1)
 
-        neg_msk = context_msk.repeat(10, axis=1)
+        if mode == 1:
+            new_context_wvs = T.zeros_like(context_wvs[:, :, :1],
+                                           dtype=theano.config.floatX)
+            for b in range(self.batch_size):
+                cos_sim = T.exp(T.dot(self.input[b], context_wvs[b, :, :]))
+                cos_sim =  cos_sim * context_msk[b, :]
+                cos_sim = cos_sim / cos_sim.sum()
+                new_context_wvs = T.set_subtensor(
+                    new_context_wvs[b, :, 0],
+                    T.dot(context_wvs[b, :, :], cos_sim))
+            new_neg_wvs = neg_wvs[:, :, :10]
+            new_context_msk = new_context_msk[:, :1]
+            new_neg_msk = new_neg_msk[:, :10]
 
         # Minimize cross-entropy loss function
-        results, _ = theano.scan(lambda input, context_wv, mask:
-                                 T.log(sigmoid(T.dot(input, context_wv)))*mask,
-                                 outputs_info=None,
-                                 sequences=[self.input, context_wvs, context_msk])
-        neg_results, _ = theano.scan(lambda input, neg_wv, mask:
-                                     T.log(sigmoid(-T.dot(input, neg_wv)))*mask,
-                                     outputs_info=None,
-                                     sequences=[self.input, neg_wvs, neg_msk])
+        results, _ = theano.scan(
+            lambda input, context_wv, mask:
+            T.log(sigmoid(T.dot(input, context_wv)))*mask,
+            outputs_info=None,
+            sequences=[self.input, new_context_wvs, new_context_msk])
+        neg_results, _ = theano.scan(
+            lambda input, neg_wv, mask:
+            T.log(sigmoid(-T.dot(input, neg_wv)))*mask,
+            outputs_info=None,
+            sequences=[self.input, new_neg_wvs, new_neg_msk])
 
         return -(T.sum(results, dtype=theano.config.floatX) +
                  T.sum(neg_results, dtype=theano.config.floatX)

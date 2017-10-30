@@ -257,7 +257,7 @@ def pre_train_conv_net(train,
         if pretrain == Pretrain.SKIPGRAM:
             cost = output_layer.cost_skipgram(context_idx=context, neg_idx=neg, mode=mode)
         elif pretrain == Pretrain.DEPSP:
-            cost = output_layer.cost_depsp(context_idx=context, context_msk=context_msk, neg_idx=neg)
+            cost = output_layer.cost_depsp(context_idx=context, context_msk=context_msk, neg_idx=neg, mode=mode)
 
     if not static:  # if word vectors are allowed to change, add them as model parameters
         params += [Words]
@@ -616,44 +616,44 @@ def train_conv_net(train,
                     set_zero(zero_vec)
                     set_zero_pf1(zero_vec_pf)
                     set_zero_pf2(zero_vec_pf)
-            else:
-                step_size = n_batches / 5 if n_batches / 5 != 0 else 1
-                for progress in range(n_batches / 5, n_batches + 1, step_size):
-                    prev_valid_cost = sys.maxint
-                    iteration = 0  # number of epochs spent for each curriculum
-                    wait_until_decrease = 0  # epochs spent for waiting decrease of validation cost
-
-                    while True:
-                        print "progress: " + str(progress / step_size) + ", iteration: ", str(iteration)
-                        for train_batch_idx in range(progress):
-                            inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
-                            batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
-                                                        train_eposs, test_one, img_h)
-                            train_model_batch(*batch_data)
-                            set_zero(zero_vec)
-                            set_zero_pf1(zero_vec_pf)
-                            set_zero_pf2(zero_vec_pf)
-
-                        valid_cost = 0
-                        for valid_batch_idx in range(n_valid_batches):
-                            inst_indices = range(valid_batch_idx * batch_size, (valid_batch_idx + 1) * batch_size)
-                            batch_data = get_batch_data(inst_indices, valid_rels, valid_nums, valid_sents, valid_poss,
-                                                        valid_eposs, test_one, img_h)
-                            valid_cost += valid_model_batch(*batch_data)
-                        valid_cost /= float(n_valid_batches)
-                        print("validation cost: " + str(valid_cost))
-
-                        iteration += 1
-                        if iteration >= 15:  # 15 is the limit of epochs for each curriculum
-                            break
-
-                        if valid_cost >= prev_valid_cost:
-                            wait_until_decrease += 1
-                            if wait_until_decrease > 4:  # 5 is the limit of waiting time for increase of val cost
-                                break
-                        else:
-                            prev_valid_cost = valid_cost
-                            wait_until_decrease = 0
+            # else:
+            #     step_size = n_batches / 5 if n_batches / 5 != 0 else 1
+            #     for progress in range(n_batches / 5, n_batches + 1, step_size):
+            #         prev_valid_cost = sys.maxint
+            #         iteration = 0  # number of epochs spent for each curriculum
+            #         wait_until_decrease = 0  # epochs spent for waiting decrease of validation cost
+            #
+            #         while True:
+            #             print "progress: " + str(progress / step_size) + ", iteration: ", str(iteration)
+            #             for train_batch_idx in range(progress):
+            #                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
+            #                 batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
+            #                                             train_eposs, test_one, img_h)
+            #                 train_model_batch(*batch_data)
+            #                 set_zero(zero_vec)
+            #                 set_zero_pf1(zero_vec_pf)
+            #                 set_zero_pf2(zero_vec_pf)
+            #
+            #             valid_cost = 0
+            #             for valid_batch_idx in range(n_valid_batches):
+            #                 inst_indices = range(valid_batch_idx * batch_size, (valid_batch_idx + 1) * batch_size)
+            #                 batch_data = get_batch_data(inst_indices, valid_rels, valid_nums, valid_sents, valid_poss,
+            #                                             valid_eposs, test_one, img_h)
+            #                 valid_cost += valid_model_batch(*batch_data)
+            #             valid_cost /= float(n_valid_batches)
+            #             print("validation cost: " + str(valid_cost))
+            #
+            #             iteration += 1
+            #             if iteration >= 15:  # 15 is the limit of epochs for each curriculum
+            #                 break
+            #
+            #             if valid_cost >= prev_valid_cost:
+            #                 wait_until_decrease += 1
+            #                 if wait_until_decrease > 4:  # 5 is the limit of waiting time for increase of val cost
+            #                     break
+            #             else:
+            #                 prev_valid_cost = valid_cost
+            #                 wait_until_decrease = 0
 
             # TODO: change this part for {validation | test}
             valid_predict = predict_relation(valid_rels, valid_nums, valid_sents,
