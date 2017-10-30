@@ -111,7 +111,7 @@ def L1_norm(params):
     L1 = 0
     ld = 1e-6
     for param in params:
-        L1 += ld * abs(param)
+        L1 += ld * T.sum(abs(param))
     return L1
 
 def L2_norm(params):
@@ -1110,12 +1110,13 @@ if __name__ == "__main__":
         os.mkdir('./results_sem_eval/')
 
     # change result dir name as you want
-    resultdir = './results_sem_eval/' + str(pretrain) + '_r_' + str(rnd) + '_opt_' + \
-                str(optimizer) + '_lr_' + str(lr).replace('.', '')
-    if pretrain != 'none':
-        resultdir += '_m_' + str(mode)
-    if pretrain == 'skipgram':
-        resultdir += '_c_' + str(context_size)
+    if pretrain == 'none':
+        resultdir = './results_sem_eval/' + str(pretrain) + '_r_' + str(rnd)
+    else:
+        resultdir = './results_sem_eval/' + str(pretrain) + '_r_' + str(rnd) + '_opt_' + \
+                    str(optimizer) + '_lr_' + str(lr).replace('.', '') + '_m_' + str(mode)
+        if pretrain == 'skipgram':
+            resultdir += '_c_' + str(context_size)
 
     if not os.path.exists(resultdir):
         os.mkdir(resultdir)

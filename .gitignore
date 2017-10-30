@@ -2,7 +2,6 @@ e_*
 /__pycache__
 *.pyc
 /data
-*.ipynb
 /C_*
 /gap_40_len_80
 .*.swp
@@ -14,3 +13,6 @@ recent_config
 /tuning_logs
 /nyt_NRE_results
 /old_results_sem_eval
+.ipynb_checkpoints/
+pr_graph2.ipynb
+pr_graph_1018.ipynb
