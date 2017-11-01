@@ -365,8 +365,8 @@ def pre_train_conv_net(train,
                     print("#pre_training result saving: " +
                           str(train_batch_idx) + " [" +
                           time.asctime(time.localtime(time.time())) + "]")
-                    pickle.dump([conv_layer.W.get_value(), Words.get_value(),
-                                 PF1W.get_value(), PF2W.get_value()],
+                    pickle.dump([conv_layer.W.get_value(), conv_layer.b.get_value(),
+                                 Words.get_value(), PF1W.get_value(), PF2W.get_value()],
                                 open(directory + "/pre_trained_data/weights_" +
                                      str(epoch) + "_" + str(train_batch_idx) +
                                      ".p", "wb"))
@@ -409,8 +409,8 @@ def pre_train_conv_net(train,
         epoch += 1
         cost_f.close()
 
-    return [conv_layer.W.get_value(), Words.get_value(),
-            PF1W.get_value(), PF2W.get_value()]
+    return [conv_layer.W.get_value(), conv_layer.b.get_value(),
+            Words.get_value(), PF1W.get_value(), PF2W.get_value()]
 
 
 def train_conv_net(train,
@@ -435,6 +435,7 @@ def train_conv_net(train,
                    borrow=True,
                    curriculum="none",
                    conv_layer_W=None,
+                   conv_layer_b=None,
                    rnd=3435,
                    ):
     # T.config.exception_verbosity='high'
@@ -553,7 +554,8 @@ def train_conv_net(train,
         conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,
                                         image_shape=(batch_size, 1, img_h, img_w + pf_dim * 2),
                                         filter_shape=filter_shape, pool_size=pool_size,
-                                        non_linear=conv_non_linear, max_window_len=3, W=conv_layer_W)
+                                        non_linear=conv_non_linear, max_window_len=3,
+                                        W=conv_layer_W, b=conv_layer_b)
         layer1_input = conv_layer.output.flatten(2)
 
         # the number of hidden unit 0 equals to the features multiple the number of filter (100*1=100)
@@ -1213,6 +1215,7 @@ if __name__ == "__main__":
     PF2 = np.asarray(rng.uniform(
         low=-1, high=1, size=[2 * max_l - 1, 5]), dtype=theano.config.floatX)
     conv_layer_W = None
+    conv_layer_b = None
 
     import sys
     sys.setrecursionlimit(10000)
@@ -1225,13 +1228,13 @@ if __name__ == "__main__":
             data.sort(key=natural_keys)
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights... " + str(data[-1])
-            [conv_layer_W, Wv, PF1, PF2] = pickle.load(
+            [conv_layer_W, conv_layer_b, Wv, PF1, PF2] = pickle.load(
                 open(resultdir + "/pre_trained_data/" + str(data[-1]), "rb"))
             print '[' + time.asctime(time.localtime()) + \
                   "] Loading pre-trained weights finished! " + str(data[-1])
         else:
             print '[' + time.asctime(time.localtime()) + "] pre_train_conv_net started..."
-            conv_layer_W, Wv, PF1, PF2 = pre_train_conv_net(
+            conv_layer_W, conv_layer_b, Wv, PF1, PF2 = pre_train_conv_net(
                             train=pretrainData,
                             test=test,
                             U=Wv,
@@ -1297,5 +1300,6 @@ if __name__ == "__main__":
                    img_w=dimension,
                    curriculum=curriculum,
                    conv_layer_W=conv_layer_W,
+                   conv_layer_b=conv_layer_b,
                    rnd=rnd
                    )

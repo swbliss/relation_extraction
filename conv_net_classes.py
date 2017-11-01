@@ -334,7 +334,7 @@ class LeNetConvPoolLayer(object):
     """Pool Layer of a convolutional network """
 
     def __init__(self, rng, input, filter_shape, image_shape, pool_size,
-                 non_linear="tanh", max_window_len=3, W=None):
+                 non_linear="tanh", max_window_len=3, W=None, b=None):
         """
         Allocate a LeNetConvPoolLayer with shared variable internal parameters.
 
@@ -384,8 +384,12 @@ class LeNetConvPoolLayer(object):
             W_bound = numpy.sqrt(6. / (fan_in + fan_out))
             self.W = theano.shared(numpy.asarray(rng.uniform(low=-W_bound, high=W_bound, size=filter_shape),
                                                  dtype=theano.config.floatX), borrow=True, name="W_conv")
-        b_values = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX)
-        self.b = theano.shared(value=b_values, borrow=True, name="b_conv")
+
+        if not isinstance(b, type(None)):
+            self.b = theano.shared(numpy.asarray(b, dtype=theano.config.floatX), borrow=True, name="b_conv")
+        else:
+            b_values = numpy.zeros((filter_shape[0],), dtype=theano.config.floatX)
+            self.b = theano.shared(value=b_values, borrow=True, name="b_conv")
 
         # convolve input feature maps with filters
         conv_out = conv2d(input=input, filters=self.W, filter_shape=self.filter_shape, input_shape=self.image_shape)
