@@ -75,7 +75,8 @@ class DropoutHiddenLayer(HiddenLayer):
 class MLPDropout(object):
     """A multilayer perceptron with dropout"""
 
-    def __init__(self, rng, input, layer_sizes, dropout_rates, activations, use_bias=True):
+    def __init__(self, rng, input, layer_sizes, dropout_rates, activations,
+                 use_bias=True, W=None, b=None):
 
         # rectified_linear_activation = lambda x: T.maximum(0.0, x)
 
@@ -117,7 +118,7 @@ class MLPDropout(object):
         n_in, n_out = self.weight_matrix_sizes[-1]
         dropout_output_layer = LogisticRegression(
             input=next_dropout_layer_input,
-            n_in=n_in, n_out=n_out)
+            n_in=n_in, n_out=n_out, W=W, b=b)
         self.dropout_layers.append(dropout_output_layer)
 
         # Again, reuse paramters in the dropout output.
@@ -372,10 +373,10 @@ class LeNetConvPoolLayer(object):
         fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / image_shape[2])
         # initialize weights with random weights
         if not isinstance(W, type(None)):
-            avg = numpy.average(W)
-            std = numpy.std(W)
-            W = (W - avg) / std
-            W /= numpy.abs(numpy.max(W)) * 100
+            # avg = numpy.average(W)
+            # std = numpy.std(W)
+            # W = (W - avg) / std
+            # W /= numpy.abs(numpy.max(W)) * 100
             self.W = theano.shared(numpy.asarray(W, dtype=theano.config.floatX), borrow=True, name="W_conv")
         elif self.non_linear == "none" or self.non_linear == "relu":
             self.W = theano.shared(numpy.asarray(rng.uniform(low=-0.01, high=0.01, size=filter_shape),
@@ -638,6 +639,9 @@ class SkipgramLayer(object):
             outputs_info=None,
             sequences=[self.input, new_neg_wvs, new_neg_msk])
 
-        return -(T.sum(results, dtype=theano.config.floatX) +
-                 T.sum(neg_results, dtype=theano.config.floatX)
-                 ) / T.sum(context_msk)
+        res = -(T.sum(results, dtype=theano.config.floatX) +
+                 T.sum(neg_results, dtype=theano.config.floatX))
+        if mode == 0:
+            return  res / T.sum(context_msk)
+        else:
+            return res
