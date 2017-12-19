@@ -25,14 +25,13 @@ class Pretrain(Enum):
     DEPSP = 3
 
 def parse_argv(argv):
-    opts, args = getopt.getopt(sys.argv[1:], "he:s:u:l:b:w:c:d:i:C:tp:o:L:r:S:m:",
-                               ['epoch', 'static', 'hidden_units',
+    opts, args = getopt.getopt(sys.argv[1:], "he:s:l:b:w:c:d:i:C:tp:o:L:r:S:m:",
+                               ['epoch', 'static',
                                 'batch_size', 'window', 'active_function',
                                 'dimension', 'inputdir', 'curriculum',
                                 'test', 'pretrain', 'rnd',])
     epochs = 15
     static = False
-    hidden_units_str = '100_10'
     max_l = 80
     batch_size = 50
     window_size = 3
@@ -52,8 +51,6 @@ def parse_argv(argv):
             epochs = int(value)
         elif op == '-s':
             static = bool(int(value))
-        elif op == '-u':
-            hidden_units_str = value
         elif op == '-l':
             max_l = int(value)
         elif op == '-b':
@@ -86,7 +83,7 @@ def parse_argv(argv):
             # TODO (swjung): why we don't control hidden unints
             # usage()
             sys.exit()
-    return [epochs, static, hidden_units_str, max_l,
+    return [epochs, static,  max_l,
             batch_size, window_size, conv_non_linear, dimension,
             inputdir, curriculum, for_test, pretrain, rnd, optimizer, lr,
             context_size, mode]
@@ -491,6 +488,7 @@ def train_conv_net(train,
     # Train data splitting.
     # Shuffle train dataset and assign to mini batches.
     # If dataset size is not a multiple of mini batches, replicate
+
     if len(train) % batch_size > 0:
         extra_data_num = batch_size - len(train) % batch_size
         rand_train = np.random.permutation(train)
@@ -498,9 +496,15 @@ def train_conv_net(train,
         new_train = np.append(train, extra_data, axis=0)
     else:
         new_train = train
+
     new_train = np.random.permutation(new_train)
-    test = np.random.permutation(test)
     n_train_batches = new_train.shape[0] / batch_size
+
+    test = np.random.permutation(test)
+    new_valid = new_train[:n_train_batches // 10 * batch_size]
+    new_train = new_train[n_train_batches // 10 * batch_size:]
+    n_train_batches = new_train.shape[0]/batch_size
+    n_valid_batches = new_valid.shape[0]/batch_size
 
    # TODO: change this part to apply curriculum learning
     if curriculum == "none":
@@ -597,7 +601,18 @@ def train_conv_net(train,
         params += [PF2W]
 
         [train_rels, train_nums, train_sents, train_poss, train_eposs] = bags_decompose(new_train)
+        [valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs] = bags_decompose(new_train)
         [test_rels, test_nums, test_sents, test_poss, test_eposs] = bags_decompose(test)
+
+        '''
+        try:
+            rel_log = open(directory + '/rels.txt', 'w')
+            rel_log.write(' '.join(list(map(lambda x: str(x[0]), train_rels))))
+            rel_log.close()
+        except:
+            import pdb;pdb.set_trace()
+        import pdb;pdb.set_trace()
+        '''
 
         test_size = 1
         test_input_words = Words[x.flatten()].reshape((x.shape[0], 1, x.shape[1], Words.shape[1]))
@@ -609,13 +624,16 @@ def train_conv_net(train,
         test_layer1_input = test_layer0_output.flatten(2)
         p_y_given_x = classifier.predict_p(test_layer1_input)
         test_one = theano.function([x, p1, p2, pool_size], p_y_given_x)
+        test_rep = theano.function([x, p1, p2, pool_size], test_layer1_input)
 
+        # TODO: debugging 1129
         dropout_cost = classifier.dropout_negative_log_likelihood(y)
-        dropout_cost += L2_norm(params)
+        # dropout_cost += L2_norm(params)
         grad_updates = adagrad(dropout_cost, params, learning_rate=0.05)
         # grad_updates = adadelta(dropout_cost, params, rho=lr_decay)
         # grad_updates = sgd(dropout_cost, params, 1e-3)
         # grad_updates = my_updates(params)
+        test_batch = theano.function([x, p1, p2, pool_size], p_y_given_x, on_unused_input='ignore')
         train_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost, updates=grad_updates, )
         valid_model_batch = theano.function([x, p1, p2, pool_size, y], dropout_cost)
 
@@ -629,82 +647,51 @@ def train_conv_net(train,
         print '\n' + str(now) + '\t batches ' + str(n_batches)
         epoch = 0
 
+        dir_batch = directory + "/batches_" + str(n_batches) + "/"
+        if not os.path.exists(dir_batch):
+                os.mkdir(dir_batch)
+
+        cost_f = open(dir_batch + "cost_log_epoch_sup", "w")
+        save_rep(test_rels, test_nums, test_sents, test_poss, test_eposs,
+                 test_rep, img_h, dir_batch, 'sent_embeddings_bef')
         while (epoch < epochs):
-            # TODO: change this part to apply curriculum learning
             if curriculum == "none":
+                cost = 0
                 for train_batch_idx in range(n_batches):
                     inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
                     batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
                                                 train_eposs, test_one, img_h)
-                    cost = train_model_batch(*batch_data)
+                    cost += train_model_batch(*batch_data)
 
                     set_zero(zero_vec)
                     set_zero_pf1(zero_vec_pf)
                     set_zero_pf2(zero_vec_pf)
-            # else:
-            #     step_size = n_batches / 5 if n_batches / 5 != 0 else 1
-            #     for progress in range(n_batches / 5, n_batches + 1, step_size):
-            #         prev_valid_cost = sys.maxint
-            #         iteration = 0  # number of epochs spent for each curriculum
-            #         wait_until_decrease = 0  # epochs spent for waiting decrease of validation cost
-            #
-            #         while True:
-            #             print "progress: " + str(progress / step_size) + ", iteration: ", str(iteration)
-            #             for train_batch_idx in range(progress):
-            #                 inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
-            #                 batch_data = get_batch_data(inst_indices, train_rels, train_nums, train_sents, train_poss,
-            #                                             train_eposs, test_one, img_h)
-            #                 train_model_batch(*batch_data)
-            #                 set_zero(zero_vec)
-            #                 set_zero_pf1(zero_vec_pf)
-            #                 set_zero_pf2(zero_vec_pf)
-            #
-            #             valid_cost = 0
-            #             for valid_batch_idx in range(n_valid_batches):
-            #                 inst_indices = range(valid_batch_idx * batch_size, (valid_batch_idx + 1) * batch_size)
-            #                 batch_data = get_batch_data(inst_indices, valid_rels, valid_nums, valid_sents, valid_poss,
-            #                                             valid_eposs, test_one, img_h)
-            #                 valid_cost += valid_model_batch(*batch_data)
-            #             valid_cost /= float(n_valid_batches)
-            #             print("validation cost: " + str(valid_cost))
-            #
-            #             iteration += 1
-            #             if iteration >= 15:  # 15 is the limit of epochs for each curriculum
-            #                 break
-            #
-            #             if valid_cost >= prev_valid_cost:
-            #                 wait_until_decrease += 1
-            #                 if wait_until_decrease > 4:  # 5 is the limit of waiting time for increase of val cost
-            #                     break
-            #             else:
-            #                 prev_valid_cost = valid_cost
-            #                 wait_until_decrease = 0
+                cost_f.write(str(epoch) + " " + str(cost/float(n_batches)) + "\n")
 
-            test_predict = predict_relation(test_rels, test_nums, test_sents, test_poss, test_eposs, test_one, img_h)
+            test_predict = predict_relation(valid_rels, valid_nums, valid_sents, valid_poss, valid_eposs, test_one, img_h)
             test_pr = positive_evaluation(test_predict)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
+
             print str(now) + '\t epoch ' + str(epoch) + ' test set PR = [' + str(test_pr[0][-1]) + ' ' + str(
                 test_pr[1][-1]) + ']'
 
             p = test_pr[0][-1]
             r = test_pr[1][-1]
 
-            dir_batch = directory + "/batches_" + str(n_batches) + "/"
-
-            if not os.path.exists(dir_batch):
-                os.mkdir(dir_batch)
-
             save_pr(dir_batch + 'test_pr_' + str(epoch) + '.txt', test_pr)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
             print '\n'
             epoch += 1
-
+        save_rep(test_rels, test_nums, test_sents, test_poss, test_eposs,
+                 test_rep, img_h, dir_batch, 'sent_embeddings_aft')
+        cost_f.close()
 
 def calc_atts(train,
               U,
               PF1,
               PF2,
+              neg_table,
               filter_hs=3,
               conv_non_linear="tanh",
               hidden_units=[100, 51],
@@ -808,7 +795,8 @@ def calc_atts(train,
 
     print "--------[3]--------"
     skip_gram = SkipgramLayer(input=layer1_input, words=Words, batch_size=batch_size,
-                              img_w=img_w, for_test=for_test, inputdir=inputdir)
+                              img_w=img_w, for_test=for_test, ctx_size=2, max_l=max_l,
+                              neg_table=neg_table)
 
     atts = skip_gram.atts(context_idx=context)
 
@@ -834,7 +822,7 @@ def calc_atts(train,
 
         inst_indices = range(train_batch_idx * batch_size, (train_batch_idx + 1) * batch_size)
         x, p1, p2, pool_size, context_idx = pre_train_get_batch_data(inst_indices, train_nums, train_sents, train_poss,
-                                                                     train_eposs, img_h)
+                                                                     train_eposs, img_h, 2)
 
         att_vals = calc_atts(x, p1, p2, pool_size, context_idx)
 
@@ -952,6 +940,11 @@ def positive_evaluation(predict_results):
             all_pre.append(precision)
             all_rec.append(recall)
             prev_precision = precision
+
+    if len(all_pre) == 1:
+        all_pre.append(1.0)
+        all_rec.append(0.0)
+
     return [all_pre[1:], all_rec[1:],
             wrong_label[1:], wrong_answer[1:], wrong_epos[1:], wrong_sent[1:]]
 
@@ -983,7 +976,6 @@ def pre_train_select_instance(nums, sents, poss, eposs, img_h, ctx_size):
 
     return [x, p1, p2, pool_size, context_idx]
 
-
 def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
     numBags = len(rels)
     x = np.zeros((numBags, img_h), dtype='int32')
@@ -994,18 +986,6 @@ def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
 
     for bagIndex, insNum in enumerate(nums):
         maxIns = 0
-        maxP = -1
-        if insNum > 1:
-            for m in range(insNum):
-                insPos = poss[bagIndex][m]
-                insX = np.asarray(sents[bagIndex][m], dtype='int32').reshape((1, img_h))
-                insPf1 = np.asarray(insPos[0], dtype='int32').reshape((1, img_h))
-                insPf2 = np.asarray(insPos[1], dtype='int32').reshape((1, img_h))
-                insPool = np.asarray(eposs[bagIndex][m], dtype='int32').reshape((1, 2))
-                results = test_one(insX, insPf1, insPf2, insPool)
-                p = results[0][y[bagIndex]]
-                if p > maxP:
-                    maxIns = m
         x[bagIndex, :] = sents[bagIndex][maxIns]
         p1[bagIndex, :] = poss[bagIndex][maxIns][0]
         p2[bagIndex, :] = poss[bagIndex][maxIns][1]
@@ -1013,6 +993,50 @@ def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
 
     return [x, p1, p2, pool_size, y]
 
+
+# def select_instance(rels, nums, sents, poss, eposs, test_one, img_h):
+#     numBags = len(rels)
+#     x = np.zeros((numBags, img_h), dtype='int32')
+#     p1 = np.zeros((numBags, img_h), dtype='int32')
+#     p2 = np.zeros((numBags, img_h), dtype='int32')
+#     pool_size = np.zeros((numBags, 2), dtype='int32')
+#     y = np.asarray(rels, dtype='int32')
+#     max_idx = []
+#
+#     for bagIndex, insNum in enumerate(nums):
+#         maxIns = 0
+#         maxP = -1
+#         if insNum > 1:
+#             for m in range(insNum):
+#                 insPos = poss[bagIndex][m]
+#                 insX = np.asarray(sents[bagIndex][m], dtype='int32').reshape((1, img_h))
+#                 insPf1 = np.asarray(insPos[0], dtype='int32').reshape((1, img_h))
+#                 insPf2 = np.asarray(insPos[1], dtype='int32').reshape((1, img_h))
+#                 insPool = np.asarray(eposs[bagIndex][m], dtype='int32').reshape((1, 2))
+#                 results = test_one(insX, insPf1, insPf2, insPool)
+#                 p = results[0][y[bagIndex]]
+#                 if p > maxP:
+#                     maxIns = m
+#         x[bagIndex, :] = sents[bagIndex][maxIns]
+#         p1[bagIndex, :] = poss[bagIndex][maxIns][0]
+#         p2[bagIndex, :] = poss[bagIndex][maxIns][1]
+#         pool_size[bagIndex, :] = eposs[bagIndex][maxIns]
+#         max_idx.append(maxIns)
+#
+#     return [x, p1, p2, pool_size, y]
+
+def save_rep(rels, nums, sents, poss, eposs, test_rep, img_h, res_dir, f_name):
+    f = open(res_dir + f_name, "w")
+    for bagIndex, insRel in enumerate(rels):
+        insPos = poss[bagIndex][0]
+        insX = np.asarray(sents[bagIndex][0], dtype='int32').reshape((1, img_h))
+        insPf1 = np.asarray(insPos[0], dtype='int32').reshape((1, img_h))
+        insPf2 = np.asarray(insPos[1], dtype='int32').reshape((1, img_h))
+        insPool = np.asarray(eposs[bagIndex][0], dtype='int32').reshape((1, 2))
+        results = test_rep(insX, insPf1, insPf2, insPool)
+        f.write(str(insRel[0]) + '\t')
+        f.write(' '.join(list(map(lambda x: str(x), results[0]))) + '\n')
+    f.close()
 
 def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
     numBags = len(rels)
@@ -1023,11 +1047,10 @@ def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
     significant_eposs = []
 
     for bagIndex, insRel in enumerate(rels):
-        insNum = nums[bagIndex]
+        insNum = 1 #nums[bagIndex]
         maxP = -1
         pred_rel_type = 0
         max_pos_p = -1
-        max_index = 0
         positive_flag = False
         for m in range(insNum):
             insPos = poss[bagIndex][m]
@@ -1047,19 +1070,15 @@ def predict_relation(rels, nums, sents, poss, eposs, test_one, img_h):
                     if tmpMax > max_pos_p:
                         max_pos_p = tmpMax
                         pred_rel_type = rel_type
-                        max_index = m
                 else:
                     if tmpMax > maxP:
                         maxP = tmpMax
-                        if not positive_flag:
-                            max_index = m
-        significant_sents.append(sents[bagIndex][max_index])
-        significant_eposs.append(eposs[bagIndex][max_index])
+        significant_sents.append(sents[bagIndex][0])
+        significant_eposs.append(eposs[bagIndex][0])
         if positive_flag:
             predict_y_prob[bagIndex] = max_pos_p
         else:
             predict_y_prob[bagIndex] = maxP
-
         predict_y[bagIndex] = pred_rel_type
     return [predict_y, predict_y_prob, y, significant_eposs, significant_sents]
 
@@ -1095,7 +1114,7 @@ def natural_keys(text):
 
 
 if __name__ == "__main__":
-    epochs, static, hidden_units_str, max_l, batch_size, \
+    epochs, static,  max_l, batch_size, \
     window_size, conv_non_linear, dimension, inputdir, \
     curriculum, for_test, pretrain, rnd, optimizer, lr,\
     context_size, mode = parse_argv(sys.argv[1:])
@@ -1111,6 +1130,17 @@ if __name__ == "__main__":
     np.random.seed(rnd)
     random.seed(rnd)
 
+    res_dir_pre = '_'.join(inputdir.split('_')[1:])
+    if not os.path.exists('./results_' + res_dir_pre + '/'):
+        os.mkdir('./results_' + res_dir_pre + '/')
+
+    if res_dir_pre == 'sem_eval':
+        hidden_units_str = '100_10'
+    elif res_dir_pre == 'ace':
+        hidden_units_str = '100_18'
+    elif res_dir_pre == 'riedel':
+        hidden_units_str = '100_53'
+
     hu_str = hidden_units_str.split('_')
     hidden_units = [int(hu_str[0])]
     activations = []
@@ -1125,10 +1155,6 @@ if __name__ == "__main__":
         dataset.wv2pickle(inputdir + '/wv.txt', dimension,
                           inputdir + '/Wv.p', for_test=for_test)
         print '[' + time.asctime(time.localtime()) + '] making wv.p finished.'
-
-    res_dir_pre = '_'.join(inputdir.split('_')[1:])
-    if not os.path.exists('./results_' + res_dir_pre + '/'):
-        os.mkdir('./results_' + res_dir_pre + '/')
 
     # change result dir name as you want
     if pretrain == 'none':
@@ -1239,18 +1265,25 @@ if __name__ == "__main__":
     import sys
     sys.setrecursionlimit(10000)
 
+    '''
     if pretrain != Pretrain.NONE:
+        pre_resdir = resultdir.replace(res_dir_pre, 'sem_eval')
         if not os.path.exists(resultdir + "/pre_trained_data/"):
             os.mkdir(resultdir + "/pre_trained_data/")
-        data = os.listdir(resultdir + "/pre_trained_data")
+        data = os.listdir(pre_resdir + "/pre_trained_data")
         if len(data) != 0:
             data.sort(key=natural_keys)
+            if pretrain == Pretrain.DEPSP or pretrain == Pretrain.SKIPGRAM:
+                weights = 'weights_14_1683.p'
+            elif pretrain == Pretrain.SEQ2SEQ:
+                weights = 'weights_29_1683.p'
+
             print '[' + time.asctime(time.localtime()) + \
-                  "] Loading pre-trained weights... " + str(data[-1])
-            [conv_layer_W, conv_layer_b, Wv, PF1, PF2] = pickle.load(
-                open(resultdir + "/pre_trained_data/" + str(data[-1]), "rb"))
+                  "] Loading pre-trained weights... " + weights
+            [conv_layer_W, conv_layer_b, _, PF1, PF2] = pickle.load(
+                open(pre_resdir + "/pre_trained_data/" + weights, "rb"))
             print '[' + time.asctime(time.localtime()) + \
-                  "] Loading pre-trained weights finished! " + str(data[-1])
+                  "] Loading pre-trained weights finished! " + weights
         else:
             print '[' + time.asctime(time.localtime()) + "] pre_train_conv_net started..."
             conv_layer_W, conv_layer_b, Wv, PF1, PF2 = pre_train_conv_net(
@@ -1280,13 +1313,14 @@ if __name__ == "__main__":
                             ctx_size=context_size,
                             mode=mode,
                             )
-
     '''
+
     print '[' + time.asctime(time.localtime()) + "] calc_atts started..."
-    calc_atts(pretrain,
+    calc_atts(pretrainData,
             Wv,
             PF1,
             PF2,
+            negTable,
             filter_hs=window_size,
             conv_non_linear=conv_non_linear,
             hidden_units=hidden_units,
@@ -1300,8 +1334,8 @@ if __name__ == "__main__":
             curriculum=curriculum,
             conv_layer_W=conv_layer_W,
             rnd=rnd)
-    '''
 
+    '''
     print '[' + time.asctime(time.localtime()) + "] train_conv_net started..."
     train_conv_net(train,
                    test,
@@ -1322,3 +1356,4 @@ if __name__ == "__main__":
                    conv_layer_b=conv_layer_b,
                    rnd=rnd
                    )
+    '''

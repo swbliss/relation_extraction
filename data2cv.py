@@ -67,6 +67,12 @@ def make_idx_data_cv(data, filter_h, max_l):
             if pos[0] > max_l - 1 or pos[1] > max_l - 1:
                 remove_idx.append(i)
                 num -= 1
+            elif pos[0] == 0 or pos[1] == 0:
+                remove_idx.append(i)
+                num -= 1
+            elif pos[0] == pos[1]:
+                remove_idx.append(i)
+                num -= 1
 
         for i, sentence in enumerate(sentences):
             if i in remove_idx:

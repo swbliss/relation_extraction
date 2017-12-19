@@ -486,6 +486,32 @@ class SkipgramLayer(object):
         atts = T.zeros((self.batch_size, 2 + self.ctx_size*4), dtype=theano.config.floatX)
         context_wvs = self.words[context_idx.flatten()].reshape(
             (self.batch_size, 2 + self.ctx_size*4, self.img_w)).transpose((0, 2, 1))
+
+        for b in range(self.batch_size):
+            total_cos_sim = 0
+            total_cos_sim2 = 0
+            for c in range(2 + self.ctx_size*4):
+                if c == self.ctx_size or c == self.ctx_size*3 + 1:  # e1
+                    continue
+                elif c < self.ctx_size*2  + 1:
+                    cos_sim = T.exp(
+                        T.dot(self.input[b, :], context_wvs[b, :, c]))
+                    total_cos_sim += cos_sim
+                    atts = T.set_subtensor(atts[b, c], cos_sim)
+                else:
+                    cos_sim = T.exp(
+                        T.dot(self.input[b, :], context_wvs[b, :, c]))
+                    total_cos_sim2 += cos_sim
+                    atts = T.set_subtensor(atts[b, c], cos_sim)
+
+            for c in range(2 + self.ctx_size*4):
+                if c == self.ctx_size or c == self.ctx_size*3 + 1:  # e1
+                    continue
+                elif c < self.ctx_size*2  + 1:
+                    atts = T.set_subtensor(atts[b, c], atts[b, c] / total_cos_sim)
+                else:
+                    atts = T.set_subtensor(atts[b, c], atts[b, c] / total_cos_sim2)
+        '''
         for b in range(self.batch_size):
             total_cos_sim = 0
             for c in range(2 + self.ctx_size*4):
@@ -495,6 +521,7 @@ class SkipgramLayer(object):
                 total_cos_sim += cos_sim
                 atts = T.set_subtensor(atts[b, c], cos_sim)
             atts = T.set_subtensor(atts[b, :], atts[b, :] / total_cos_sim)
+        '''
         return atts
 
     def cost_skipgram(self, context_idx, neg_idx, mode):
@@ -641,7 +668,4 @@ class SkipgramLayer(object):
 
         res = -(T.sum(results, dtype=theano.config.floatX) +
                  T.sum(neg_results, dtype=theano.config.floatX))
-        if mode == 0:
-            return  res / T.sum(context_msk)
-        else:
-            return res
+        return  res / T.sum(context_msk)

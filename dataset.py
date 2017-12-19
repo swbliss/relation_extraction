@@ -4,6 +4,7 @@ import numpy as np
 import theano
 
 import utils
+import time
 
 
 class InstanceBag(object):
@@ -28,10 +29,15 @@ def readData(filename, for_test, word_size, for_dep_sp, max_l):
 
     bag_num = 0
     while True:
+        if bag_num % 100000 == 0:
+            print('[' + time.asctime(time.localtime(time.time())) +
+                  '] bag_num:' + str(bag_num))
+
         line = f.readline()
         if not line:
             break
         entities = map(int, line.split(' '))
+
         if for_test:
             replace_unknown_words(entities, word_size)
 
