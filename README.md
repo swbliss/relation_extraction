@@ -5,5 +5,9 @@ Inspired by skip-gram model, the model attempts to predict key words, defined in
 
 ## Built With
 * [Python2.7](https://www.python.org/download/releases/2.7/)
-* [Theano](http://deeplearning.net/software/theano/)
+* [Tensorflow](https://www.tensorflow.org/)
 
+
+## References
+* A deep learning approach for detecting malicious JavaScript code
+* Character-level Convolutional Networks for Text Classification
