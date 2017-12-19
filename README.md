@@ -5,9 +5,8 @@ Inspired by skip-gram model, the model attempts to predict key words, defined in
 
 ## Built With
 * [Python2.7](https://www.python.org/download/releases/2.7/)
-* [Tensorflow](https://www.tensorflow.org/)
+* [Theano](http://deeplearning.net/software/theano/)
 
 
 ## References
-* Wang, Yao, Wan‐dong Cai, and Peng‐cheng Wei. "A deep learning approach for detecting malicious JavaScript code." Security and Communication Networks 9.11 (2016): 1520-1534.
-* Zhang, Xiang, Junbo Zhao, and Yann LeCun. "Character-level convolutional networks for text classification." Advances in neural information processing systems. 2015.
+* Zeng, Daojian, et al. "Distant Supervision for Relation Extraction via Piecewise Convolutional Neural Networks." Emnlp. 2015.
