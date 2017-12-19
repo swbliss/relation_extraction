@@ -9,5 +9,5 @@ Inspired by skip-gram model, the model attempts to predict key words, defined in
 
 
 ## References
-* A deep learning approach for detecting malicious JavaScript code
-* Character-level Convolutional Networks for Text Classification
+* Wang, Yao, Wan‐dong Cai, and Peng‐cheng Wei. "A deep learning approach for detecting malicious JavaScript code." Security and Communication Networks 9.11 (2016): 1520-1534.
+* Zhang, Xiang, Junbo Zhao, and Yann LeCun. "Character-level convolutional networks for text classification." Advances in neural information processing systems. 2015.
