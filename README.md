@@ -4,6 +4,6 @@ Before supervised learning with relatively a small amount of labeled data, unsup
 Inspired by skip-gram model, the model attempts to predict key words, defined in two different ways, from sentence embedding during pre-training phase.
 
 ## Built With
-* [Python2.7]
-* [Theano]
+* [Python2.7](https://www.python.org/download/releases/2.7/)
+* [Theano](http://deeplearning.net/software/theano/)
 
