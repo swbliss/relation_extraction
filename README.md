@@ -23,6 +23,7 @@ format(train/test):  <br />
 * data_figer: Desmet and Hoste, 2014
 * data_riedel: Riedel et al., 2010
 * data_sem_eval: Hendrickx et al., 2010
+* data_neg_sampling: https://github.com/deborausujono/word2vecpy/blob/master/word2vec.py#L164
 
 ## Built With
 * [Python 2.7](https://www.python.org/download/releases/2.7/)
