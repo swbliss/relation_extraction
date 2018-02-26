@@ -15,9 +15,9 @@ parameters:
 
 ## Data
 format(train/test): 
-          {index of e1} {index of e2}
-          {relation index(id)} {the number of example sentences}
-          {e1's position in a sentence} {e2's position in the sentence} { id of word sequence in the sentence ...}
+          {index of e1} {index of e2} <br />
+          {relation index(id)} {the number of example sentences} <br />
+          {e1's position in a sentence} {e2's position in the sentence} { id of word sequence in the sentence ...} <br />
 
 * data_ace: Hachey et al., 2012
 * data_figer: Desmet and Hoste, 2014
